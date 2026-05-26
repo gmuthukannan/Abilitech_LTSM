@@ -1,0 +1,30 @@
+# ASL Sign-to-Text LSTM Project Requirements
+# Python 3.12
+#
+# LOCAL (CPU):
+#   pip install torch torchvision torchaudio
+#   pip install -r requirements.txt
+#
+# BREV H100 (CUDA 12.4):
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+#   pip install -r requirements.txt
+
+# Computer Vision & Pose Estimation
+opencv-python
+opencv-contrib-python
+mediapipe            # pin to ==0.10.13 only if install fails without it
+
+# Data Processing
+numpy
+pandas
+scikit-learn
+
+# Utilities
+tqdm
+matplotlib
+seaborn
+
+# Jupyter
+jupyter
+ipywidgets
+ipykernel

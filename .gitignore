@@ -1,0 +1,33 @@
+# Python virtual environment
+asl_env/
+venv/
+.venv/
+env/
+
+# Dataset (never commit raw data or extracted poses)
+dataset/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Model checkpoints & outputs
+*.pth
+*.pt
+*.ckpt
+checkpoints/
+runs/
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
