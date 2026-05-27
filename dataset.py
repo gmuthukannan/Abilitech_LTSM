@@ -63,8 +63,7 @@ class How2SignDataset(Dataset):
         )
         self.samples = []
         for _, row in df.iterrows():
-            sid = str(row["SENTENCE_ID"])
-            clip_dir = os.path.join(json_root, f"{sid}-rgb_front")
+            clip_dir = os.path.join(json_root, str(row["SENTENCE_NAME"]))
             if not os.path.isdir(clip_dir):
                 continue
             n_frames = len(glob.glob(os.path.join(clip_dir, "*.json")))
