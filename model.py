@@ -1,7 +1,7 @@
 import torch.nn as nn
 
-# 33 pose × 3 + 21 left_hand × 3 + 21 right_hand × 3
-POSE_FEATURES = 225
+# 25 OpenPose body × 3 + 21 left_hand × 3 + 21 right_hand × 3
+POSE_FEATURES = 201
 
 class SignModel(nn.Module):
     def __init__(self, in_size=POSE_FEATURES, hidden=256, out_size=None):

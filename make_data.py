@@ -1,6 +1,6 @@
 """Generate fake samples for local pipeline testing (CPU, no real video needed)."""
 import os, numpy as np
-from model import POSE_FEATURES
+from dataset import OPENPOSE_FEATURES as POSE_FEATURES
 
 SAMPLES = [
     ("sample_001", "HELLO WORLD"),
