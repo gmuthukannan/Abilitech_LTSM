@@ -22,6 +22,8 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=EPOCHS)
     p.add_argument("--batch",  type=int, default=BATCH_SIZE)
     p.add_argument("--checkpoint", default="model.pth")
+    p.add_argument("--resume", default=None,
+                   help="Path to checkpoint to resume training from")
     return p.parse_args()
 
 
@@ -67,9 +69,17 @@ def main():
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, patience=5, factor=0.5)
     ctc_loss = torch.nn.CTCLoss(blank=0, zero_infinity=True)
 
+    start_epoch = 0
     best_loss = float("inf")
 
-    for epoch in range(args.epochs):
+    if args.resume:
+        ckpt = torch.load(args.resume, map_location=device)
+        model.load_state_dict(ckpt["model"])
+        start_epoch = ckpt["epoch"] + 1
+        best_loss = ckpt["loss"]
+        print(f"Resumed from epoch {ckpt['epoch']}  (loss {ckpt['loss']:.4f})")
+
+    for epoch in range(start_epoch, args.epochs):
         model.train()
         total_loss = 0.0
 
