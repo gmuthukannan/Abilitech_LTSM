@@ -58,9 +58,7 @@ class How2SignDataset(Dataset):
         csv_path:      How2Sign annotation CSV (tab-separated, has SENTENCE_ID + SENTENCE)
         """
         df = pd.read_csv(csv_path, sep="\t")
-        json_root = os.path.join(
-            keypoints_dir, "bfh_2d_front", "openpose_output", "json"
-        )
+        json_root = os.path.join(keypoints_dir, "openpose_output", "json")
         self.samples = []
         for _, row in df.iterrows():
             clip_dir = os.path.join(json_root, str(row["SENTENCE_NAME"]))
