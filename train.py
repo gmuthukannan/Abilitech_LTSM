@@ -1,4 +1,4 @@
-import argparse, torch
+import argparse, os, torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 from torch.nn.utils.rnn import pad_sequence
@@ -101,6 +101,7 @@ def evaluate(model, loader, vocab, device):
 
 def main():
     args = parse_args()
+    os.makedirs(os.path.dirname(args.checkpoint) or ".", exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
