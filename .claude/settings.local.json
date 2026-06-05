@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:how2sign.github.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:cmu-perceptual-computing-lab.github.io)"
+    ]
+  }
+}

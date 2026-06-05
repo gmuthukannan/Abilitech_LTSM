@@ -1,6 +1,6 @@
 import argparse, torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 from torch.nn.utils.rnn import pad_sequence
 from dataset import SignDataset, How2SignDataset
 from vocab import Vocab
@@ -24,6 +24,10 @@ def parse_args():
     p.add_argument("--checkpoint", default="model.pth")
     p.add_argument("--resume", default=None,
                    help="Path to checkpoint to resume training from")
+    p.add_argument("--val_split", type=float, default=0.1,
+                   help="Fraction of data held out for validation (default: 0.1)")
+    p.add_argument("--eval_every", type=int, default=5,
+                   help="Run CER/WER eval every N epochs (default: 5)")
     return p.parse_args()
 
 
@@ -34,6 +38,38 @@ def collate_fn(batch):
     return padded, texts, input_lengths
 
 
+# ── Metrics ──────────────────────────────────────────────────────────────────
+
+def _edit_distance(a, b):
+    """Levenshtein distance between two sequences (strings or word lists)."""
+    m, n = len(a), len(b)
+    dp = list(range(n + 1))
+    for i in range(1, m + 1):
+        prev, dp[0] = dp[0], i
+        for j in range(1, n + 1):
+            temp = dp[j]
+            dp[j] = prev if a[i - 1] == b[j - 1] else 1 + min(prev, dp[j], dp[j - 1])
+            prev = temp
+    return dp[n]
+
+
+def cer(pred: str, target: str) -> float:
+    """Character Error Rate — edit distance at character level, normalised by target length."""
+    if not target:
+        return 0.0 if not pred else 1.0
+    return _edit_distance(list(pred), list(target)) / len(target)
+
+
+def wer(pred: str, target: str) -> float:
+    """Word Error Rate — edit distance at word level, normalised by target word count."""
+    p_words, t_words = pred.split(), target.split()
+    if not t_words:
+        return 0.0 if not p_words else 1.0
+    return _edit_distance(p_words, t_words) / len(t_words)
+
+
+# ── Greedy CTC decode ─────────────────────────────────────────────────────────
+
 def ctc_decode(log_probs, vocab):
     indices = log_probs.argmax(-1).tolist()
     result, prev = [], -1
@@ -43,6 +79,25 @@ def ctc_decode(log_probs, vocab):
         prev = i
     return vocab.decode(result)
 
+
+# ── Validation loop ───────────────────────────────────────────────────────────
+
+def evaluate(model, loader, vocab, device):
+    model.eval()
+    total_cer = total_wer = 0.0
+    with torch.no_grad():
+        for padded, texts, _ in loader:
+            lp = F.log_softmax(model(padded.to(device)), dim=-1)
+            for i, text in enumerate(texts):
+                pred = ctc_decode(lp[i].cpu(), vocab)
+                target = text.upper()
+                total_cer += cer(pred, target)
+                total_wer += wer(pred, target)
+    n = len(loader.dataset)
+    return total_cer / n, total_wer / n
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     args = parse_args()
@@ -61,38 +116,48 @@ def main():
         vocab.add(t)
     print(f"Vocab: {len(vocab)} tokens")
 
-    dl = DataLoader(ds, batch_size=args.batch, shuffle=True,
-                    collate_fn=collate_fn, num_workers=4, pin_memory=True)
+    val_size  = max(1, int(args.val_split * len(ds)))
+    train_size = len(ds) - val_size
+    train_ds, val_ds = random_split(
+        ds, [train_size, val_size],
+        generator=torch.Generator().manual_seed(42)
+    )
+    print(f"Split: {train_size} train / {val_size} val")
 
-    model = SignModel(POSE_FEATURES, 256, len(vocab)).to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=LR)
+    train_dl = DataLoader(train_ds, batch_size=args.batch, shuffle=True,
+                          collate_fn=collate_fn, num_workers=4, pin_memory=True)
+    val_dl   = DataLoader(val_ds,   batch_size=args.batch, shuffle=False,
+                          collate_fn=collate_fn, num_workers=4, pin_memory=True)
+
+    model    = SignModel(POSE_FEATURES, 256, len(vocab)).to(device)
+    opt      = torch.optim.Adam(model.parameters(), lr=LR)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, patience=5, factor=0.5)
-    ctc_loss = torch.nn.CTCLoss(blank=0, zero_infinity=True)
+    ctc_loss  = torch.nn.CTCLoss(blank=0, zero_infinity=True)
 
     start_epoch = 0
-    best_loss = float("inf")
+    best_cer    = float("inf")
 
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
         model.load_state_dict(ckpt["model"])
         start_epoch = ckpt["epoch"] + 1
-        best_loss = ckpt["loss"]
-        print(f"Resumed from epoch {ckpt['epoch']}  (loss {ckpt['loss']:.4f})")
+        best_cer    = ckpt.get("cer", float("inf"))
+        print(f"Resumed from epoch {ckpt['epoch']}  (CER {best_cer:.4f})")
 
     for epoch in range(start_epoch, args.epochs):
         model.train()
         total_loss = 0.0
 
-        for padded, texts, input_lengths in dl:
-            padded = padded.to(device)
-            input_lengths = input_lengths.to(device)
+        for padded, texts, input_lengths in train_dl:
+            padded         = padded.to(device)
+            input_lengths  = input_lengths.to(device)
 
-            logits = model(padded)
-            log_probs = F.log_softmax(logits, dim=-1).permute(1, 0, 2)
+            logits     = model(padded)
+            log_probs  = F.log_softmax(logits, dim=-1).permute(1, 0, 2)
 
-            encoded = [torch.tensor(vocab.encode(t), dtype=torch.long) for t in texts]
+            encoded        = [torch.tensor(vocab.encode(t), dtype=torch.long) for t in texts]
             target_lengths = torch.tensor([len(e) for e in encoded], dtype=torch.long)
-            targets = torch.cat(encoded)
+            targets        = torch.cat(encoded)
 
             loss = ctc_loss(log_probs, targets, input_lengths, target_lengths)
             opt.zero_grad()
@@ -101,25 +166,29 @@ def main():
             opt.step()
             total_loss += loss.item()
 
-        avg = total_loss / len(dl)
+        avg = total_loss / len(train_dl)
         scheduler.step(avg)
-        print(f"Epoch {epoch:3d}  Loss: {avg:.4f}  LR: {opt.param_groups[0]['lr']:.2e}")
+        print(f"Epoch {epoch:3d}  Loss: {avg:.4f}  LR: {opt.param_groups[0]['lr']:.2e}", end="")
 
-        if avg < best_loss:
-            best_loss = avg
-            torch.save({"epoch": epoch, "model": model.state_dict(),
-                        "vocab": vocab.w2i, "loss": avg}, args.checkpoint)
+        if (epoch + 1) % args.eval_every == 0 or epoch == args.epochs - 1:
+            val_cer, val_wer = evaluate(model, val_dl, vocab, device)
+            print(f"  CER: {val_cer:.4f}  WER: {val_wer:.4f}", end="")
 
-        if (epoch + 1) % 10 == 0:
-            model.eval()
-            with torch.no_grad():
-                sample_pose, sample_text, _ = next(iter(
-                    DataLoader(ds, batch_size=1, collate_fn=collate_fn)
-                ))
-                lp = F.log_softmax(model(sample_pose.to(device)), dim=-1).squeeze(0)
-                print(f"  Target: {sample_text[0]}  |  Pred: {ctc_decode(lp.cpu(), vocab)}")
+            if val_cer < best_cer:
+                best_cer = val_cer
+                torch.save({
+                    "epoch": epoch,
+                    "model": model.state_dict(),
+                    "vocab": vocab.w2i,
+                    "loss":  avg,
+                    "cer":   val_cer,
+                    "wer":   val_wer,
+                }, args.checkpoint)
+                print("  [saved]", end="")
 
-    print(f"\nBest loss: {best_loss:.4f}  |  Saved to {args.checkpoint}")
+        print()
+
+    print(f"\nBest val CER: {best_cer:.4f}  |  Saved to {args.checkpoint}")
 
 
 if __name__ == "__main__":
