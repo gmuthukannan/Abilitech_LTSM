@@ -10,6 +10,12 @@ class SignDataset(Dataset):
             f for f in os.listdir(root)
             if not f.startswith('.') and os.path.isdir(os.path.join(root, f))
         ])
+        self.mean = None
+        self.std  = None
+
+    def set_norm_stats(self, mean, std):
+        self.mean = mean
+        self.std  = std
 
     def __len__(self):
         return len(self.samples)
@@ -19,13 +25,15 @@ class SignDataset(Dataset):
         pose = torch.tensor(np.load(os.path.join(p, "pose.npy")), dtype=torch.float32)
         with open(os.path.join(p, "text.txt")) as f:
             text = f.read().strip().upper()
+        if self.mean is not None:
+            pose = (pose - self.mean) / self.std
         return pose, text
 
 
 # ── How2Sign OpenPose dataset ─────────────────────────────────────────────────
 # Expected layout after extracting train_2D_keypoints.tar.gz:
-#   <keypoints_dir>/bfh_2d_front/openpose_output/json/<SENTENCE_ID>-rgb_front/*.json
-# CSV must have columns: SENTENCE_ID, SENTENCE (tab-separated)
+#   <keypoints_dir>/openpose_output/json/<SENTENCE_NAME>/*.json
+# CSV must have columns: SENTENCE_NAME, SENTENCE (tab-separated)
 
 import pandas as pd
 
@@ -53,23 +61,37 @@ def _load_openpose_clip(clip_dir):
 
 class How2SignDataset(Dataset):
     def __init__(self, keypoints_dir, csv_path, min_frames=10):
-        """
-        keypoints_dir: root of extracted tar.gz (contains bfh_2d_front/)
-        csv_path:      How2Sign annotation CSV (tab-separated, has SENTENCE_ID + SENTENCE)
-        """
         df = pd.read_csv(csv_path, sep="\t")
         json_root = os.path.join(keypoints_dir, "openpose_output", "json")
         self.samples = []
+        skipped_missing = 0
+        skipped_ctc = 0
         for _, row in df.iterrows():
             clip_dir = os.path.join(json_root, str(row["SENTENCE_NAME"]))
             if not os.path.isdir(clip_dir):
+                skipped_missing += 1
                 continue
             n_frames = len(glob.glob(os.path.join(clip_dir, "*.json")))
             if n_frames < min_frames:
+                skipped_missing += 1
                 continue
             sentence = str(row.get("SENTENCE", "")).strip().upper()
-            if sentence:
-                self.samples.append((clip_dir, sentence))
+            if not sentence:
+                skipped_missing += 1
+                continue
+            # CTC requires input_length >= target_length
+            if n_frames < len(sentence):
+                skipped_ctc += 1
+                continue
+            self.samples.append((clip_dir, sentence))
+        print(f"  Skipped {skipped_missing} clips (missing/short), "
+              f"{skipped_ctc} clips (CTC length constraint)")
+        self.mean = None
+        self.std  = None
+
+    def set_norm_stats(self, mean, std):
+        self.mean = mean
+        self.std  = std
 
     def __len__(self):
         return len(self.samples)
@@ -77,4 +99,6 @@ class How2SignDataset(Dataset):
     def __getitem__(self, idx):
         clip_dir, text = self.samples[idx]
         pose = torch.tensor(_load_openpose_clip(clip_dir), dtype=torch.float32)
+        if self.mean is not None:
+            pose = (pose - self.mean) / self.std
         return pose, text

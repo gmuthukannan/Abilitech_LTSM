@@ -14,7 +14,7 @@ LR = 1e-3
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--keypoints", default=None,
-                   help="Path to extracted How2Sign keypoints dir (bfh_2d_front/...)")
+                   help="Path to extracted How2Sign keypoints dir")
     p.add_argument("--csv", default=None,
                    help="How2Sign annotation CSV path")
     p.add_argument("--fake", default="dataset",
@@ -28,6 +28,8 @@ def parse_args():
                    help="Fraction of data held out for validation (default: 0.1)")
     p.add_argument("--eval_every", type=int, default=5,
                    help="Run CER/WER eval every N epochs (default: 5)")
+    p.add_argument("--norm_samples", type=int, default=2000,
+                   help="Number of training clips to sample for normalisation stats")
     return p.parse_args()
 
 
@@ -36,6 +38,21 @@ def collate_fn(batch):
     input_lengths = torch.tensor([p.shape[0] for p in poses], dtype=torch.long)
     padded = pad_sequence(poses, batch_first=True)
     return padded, texts, input_lengths
+
+
+# ── Normalisation ─────────────────────────────────────────────────────────────
+
+def compute_norm_stats(dataset, train_indices, max_samples=2000):
+    """Compute per-feature mean and std from a sample of training clips."""
+    indices = list(train_indices)[:max_samples]
+    all_frames = []
+    for i in indices:
+        pose, _ = dataset[i]
+        all_frames.append(pose)
+    all_frames = torch.cat(all_frames, dim=0)  # (total_frames, features)
+    mean = all_frames.mean(0)
+    std  = all_frames.std(0).clamp(min=1e-6)
+    return mean, std
 
 
 # ── Metrics ──────────────────────────────────────────────────────────────────
@@ -117,13 +134,20 @@ def main():
         vocab.add(t)
     print(f"Vocab: {len(vocab)} tokens")
 
-    val_size  = max(1, int(args.val_split * len(ds)))
+    val_size   = max(1, int(args.val_split * len(ds)))
     train_size = len(ds) - val_size
     train_ds, val_ds = random_split(
         ds, [train_size, val_size],
         generator=torch.Generator().manual_seed(42)
     )
     print(f"Split: {train_size} train / {val_size} val")
+
+    # Compute normalisation stats from training clips and apply to dataset
+    print(f"Computing normalisation stats from up to {args.norm_samples} training clips...")
+    mean, std = compute_norm_stats(ds, train_ds.indices, max_samples=args.norm_samples)
+    ds.set_norm_stats(mean, std)
+    print(f"  Feature mean range: [{mean.min():.3f}, {mean.max():.3f}]  "
+          f"std range: [{std.min():.3f}, {std.max():.3f}]")
 
     train_dl = DataLoader(train_ds, batch_size=args.batch, shuffle=True,
                           collate_fn=collate_fn, num_workers=4, pin_memory=True)
@@ -143,6 +167,10 @@ def main():
         model.load_state_dict(ckpt["model"])
         start_epoch = ckpt["epoch"] + 1
         best_cer    = ckpt.get("cer", float("inf"))
+        # Restore normalisation stats from checkpoint if present
+        if "norm_mean" in ckpt and "norm_std" in ckpt:
+            ds.set_norm_stats(ckpt["norm_mean"], ckpt["norm_std"])
+            print(f"Restored norm stats from checkpoint")
         print(f"Resumed from epoch {ckpt['epoch']}  (CER {best_cer:.4f})")
 
     for epoch in range(start_epoch, args.epochs):
@@ -150,11 +178,11 @@ def main():
         total_loss = 0.0
 
         for padded, texts, input_lengths in train_dl:
-            padded         = padded.to(device)
-            input_lengths  = input_lengths.to(device)
+            padded        = padded.to(device)
+            input_lengths = input_lengths.to(device)
 
-            logits     = model(padded)
-            log_probs  = F.log_softmax(logits, dim=-1).permute(1, 0, 2)
+            logits    = model(padded)
+            log_probs = F.log_softmax(logits, dim=-1).permute(1, 0, 2)
 
             encoded        = [torch.tensor(vocab.encode(t), dtype=torch.long) for t in texts]
             target_lengths = torch.tensor([len(e) for e in encoded], dtype=torch.long)
@@ -178,12 +206,14 @@ def main():
             if val_cer < best_cer:
                 best_cer = val_cer
                 torch.save({
-                    "epoch": epoch,
-                    "model": model.state_dict(),
-                    "vocab": vocab.w2i,
-                    "loss":  avg,
-                    "cer":   val_cer,
-                    "wer":   val_wer,
+                    "epoch":     epoch,
+                    "model":     model.state_dict(),
+                    "vocab":     vocab.w2i,
+                    "loss":      avg,
+                    "cer":       val_cer,
+                    "wer":       val_wer,
+                    "norm_mean": mean.cpu(),
+                    "norm_std":  std.cpu(),
                 }, args.checkpoint)
                 print("  [saved]", end="")
 
