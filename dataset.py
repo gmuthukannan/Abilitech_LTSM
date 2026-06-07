@@ -14,8 +14,8 @@ class SignDataset(Dataset):
         self.std  = None
 
     def set_norm_stats(self, mean, std):
-        self.mean = mean
-        self.std  = std
+        self.mean = mean.cpu()
+        self.std  = std.cpu()
 
     def __len__(self):
         return len(self.samples)
@@ -90,8 +90,8 @@ class How2SignDataset(Dataset):
         self.std  = None
 
     def set_norm_stats(self, mean, std):
-        self.mean = mean
-        self.std  = std
+        self.mean = mean.cpu()
+        self.std  = std.cpu()
 
     def __len__(self):
         return len(self.samples)
