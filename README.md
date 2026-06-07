@@ -103,15 +103,17 @@ pip install -r requirements.txt
 ```bash
 mkdir -p checkpoints
 
+# Phase 2 — Transformer (default)
 python3 train.py \
   --keypoints /data/how2sign/ \
   --csv       /data/how2sign/train_labels.csv \
-  --epochs    50 \
+  --model     transformer \
+  --epochs    200 \
   --batch     64 \
-  --checkpoint checkpoints/model_char.pth
+  --checkpoint checkpoints/model_transformer.pth
 ```
 
-**Check the output line:** `Vocab: ~30 tokens` confirms character-level vocab is active (not word-level ~26,940).
+**Check the output line:** `Model: transformer  |  Parameters: ~6M` confirms Phase 2 is running.
 
 ### Resume after interruption
 
@@ -119,10 +121,11 @@ python3 train.py \
 python3 train.py \
   --keypoints /data/how2sign/ \
   --csv       /data/how2sign/train_labels.csv \
-  --epochs    50 \
+  --model     transformer \
+  --epochs    200 \
   --batch     64 \
-  --checkpoint checkpoints/model_char.pth \
-  --resume    checkpoints/model_char.pth
+  --checkpoint checkpoints/model_transformer.pth \
+  --resume    checkpoints/model_transformer.pth
 ```
 
 > **Note:** Only resume from a checkpoint trained with character-level vocab. Do not resume from an old word-level checkpoint — the model output dimension will mismatch (~26,940 vs ~30).

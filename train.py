@@ -1,10 +1,10 @@
-import argparse, os, torch
+import argparse, os, time, torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 from torch.nn.utils.rnn import pad_sequence
 from dataset import SignDataset, How2SignDataset
 from vocab import Vocab
-from model import SignModel, POSE_FEATURES
+from model import SignModel, TransformerSignModel, POSE_FEATURES
 
 BATCH_SIZE = 16
 EPOCHS = 50
@@ -19,6 +19,9 @@ def parse_args():
                    help="How2Sign annotation CSV path")
     p.add_argument("--fake", default="dataset",
                    help="Fake local dataset dir (default: dataset/)")
+    p.add_argument("--model", default="transformer",
+                   choices=["bilstm", "transformer"],
+                   help="Model architecture (default: transformer)")
     p.add_argument("--epochs", type=int, default=EPOCHS)
     p.add_argument("--batch",  type=int, default=BATCH_SIZE)
     p.add_argument("--checkpoint", default="model.pth")
@@ -40,6 +43,11 @@ def collate_fn(batch):
     return padded, texts, input_lengths
 
 
+def make_padding_mask(input_lengths, max_len, device):
+    """Boolean mask (batch, max_len): True where frames are padding."""
+    return torch.arange(max_len, device=device).unsqueeze(0) >= input_lengths.unsqueeze(1).to(device)
+
+
 # ── Normalisation ─────────────────────────────────────────────────────────────
 
 def compute_norm_stats(dataset, train_indices, max_samples=2000):
@@ -58,7 +66,6 @@ def compute_norm_stats(dataset, train_indices, max_samples=2000):
 # ── Metrics ──────────────────────────────────────────────────────────────────
 
 def _edit_distance(a, b):
-    """Levenshtein distance between two sequences (strings or word lists)."""
     m, n = len(a), len(b)
     dp = list(range(n + 1))
     for i in range(1, m + 1):
@@ -71,14 +78,12 @@ def _edit_distance(a, b):
 
 
 def cer(pred: str, target: str) -> float:
-    """Character Error Rate — edit distance at character level, normalised by target length."""
     if not target:
         return 0.0 if not pred else 1.0
     return _edit_distance(list(pred), list(target)) / len(target)
 
 
 def wer(pred: str, target: str) -> float:
-    """Word Error Rate — edit distance at word level, normalised by target word count."""
     p_words, t_words = pred.split(), target.split()
     if not t_words:
         return 0.0 if not p_words else 1.0
@@ -103,10 +108,12 @@ def evaluate(model, loader, vocab, device):
     model.eval()
     total_cer = total_wer = 0.0
     with torch.no_grad():
-        for padded, texts, _ in loader:
-            lp = F.log_softmax(model(padded.to(device)), dim=-1)
+        for padded, texts, input_lengths in loader:
+            padded = padded.to(device)
+            mask   = make_padding_mask(input_lengths, padded.size(1), device)
+            lp     = F.log_softmax(model(padded, src_key_padding_mask=mask), dim=-1)
             for i, text in enumerate(texts):
-                pred = ctc_decode(lp[i].cpu(), vocab)
+                pred   = ctc_decode(lp[i].cpu(), vocab)
                 target = text.upper()
                 total_cer += cer(pred, target)
                 total_wer += wer(pred, target)
@@ -142,7 +149,6 @@ def main():
     )
     print(f"Split: {train_size} train / {val_size} val")
 
-    # Compute normalisation stats from training clips and apply to dataset
     print(f"Computing normalisation stats from up to {args.norm_samples} training clips...")
     mean, std = compute_norm_stats(ds, train_ds.indices, max_samples=args.norm_samples)
     ds.set_norm_stats(mean, std)
@@ -154,8 +160,17 @@ def main():
     val_dl   = DataLoader(val_ds,   batch_size=args.batch, shuffle=False,
                           collate_fn=collate_fn, num_workers=4, pin_memory=True)
 
-    model    = SignModel(POSE_FEATURES, 256, len(vocab)).to(device)
-    opt      = torch.optim.Adam(model.parameters(), lr=LR)
+    if args.model == "transformer":
+        model = TransformerSignModel(POSE_FEATURES, d_model=256, nhead=4,
+                                     num_layers=4, dim_feedforward=1024,
+                                     dropout=0.1, out_size=len(vocab)).to(device)
+    else:
+        model = SignModel(POSE_FEATURES, hidden=256, out_size=len(vocab)).to(device)
+
+    n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Model: {args.model}  |  Parameters: {n_params:,}")
+
+    opt       = torch.optim.Adam(model.parameters(), lr=LR)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, patience=5, factor=0.5)
     ctc_loss  = torch.nn.CTCLoss(blank=0, zero_infinity=True)
 
@@ -173,9 +188,11 @@ def main():
         best_cer    = ckpt.get("cer", float("inf"))
         if "norm_mean" in ckpt and "norm_std" in ckpt:
             ds.set_norm_stats(ckpt["norm_mean"], ckpt["norm_std"])
-            print(f"Restored norm stats from checkpoint")
-        print(f"Resumed from epoch {ckpt['epoch']}  LR: {opt.param_groups[0]['lr']:.2e}  CER: {best_cer:.4f}")
+            print("Restored norm stats from checkpoint")
+        print(f"Resumed from epoch {ckpt['epoch']}  "
+              f"LR: {opt.param_groups[0]['lr']:.2e}  CER: {best_cer:.4f}")
 
+    train_start = time.time()
     for epoch in range(start_epoch, args.epochs):
         model.train()
         total_loss = 0.0
@@ -183,8 +200,9 @@ def main():
         for padded, texts, input_lengths in train_dl:
             padded        = padded.to(device)
             input_lengths = input_lengths.to(device)
+            mask          = make_padding_mask(input_lengths, padded.size(1), device)
 
-            logits    = model(padded)
+            logits    = model(padded, src_key_padding_mask=mask)
             log_probs = F.log_softmax(logits, dim=-1).permute(1, 0, 2)
 
             encoded        = [torch.tensor(vocab.encode(t), dtype=torch.long) for t in texts]
@@ -209,22 +227,26 @@ def main():
             if val_cer < best_cer:
                 best_cer = val_cer
                 torch.save({
-                    "epoch":     epoch,
-                    "model":     model.state_dict(),
-                    "vocab":     vocab.w2i,
-                    "loss":      avg,
-                    "cer":       val_cer,
-                    "wer":       val_wer,
-                    "norm_mean": mean.cpu(),
-                    "norm_std":  std.cpu(),
-                    "optimizer": opt.state_dict(),
-                    "scheduler": scheduler.state_dict(),
+                    "epoch":      epoch,
+                    "model":      model.state_dict(),
+                    "model_type": args.model,
+                    "vocab":      vocab.w2i,
+                    "loss":       avg,
+                    "cer":        val_cer,
+                    "wer":        val_wer,
+                    "norm_mean":  mean.cpu(),
+                    "norm_std":   std.cpu(),
+                    "optimizer":  opt.state_dict(),
+                    "scheduler":  scheduler.state_dict(),
                 }, args.checkpoint)
                 print("  [saved]", end="")
 
         print()
 
+    elapsed = time.time() - train_start
+    h, m, s = int(elapsed // 3600), int((elapsed % 3600) // 60), int(elapsed % 60)
     print(f"\nBest val CER: {best_cer:.4f}  |  Saved to {args.checkpoint}")
+    print(f"Training time: {h:02d}:{m:02d}:{s:02d}")
 
 
 if __name__ == "__main__":
