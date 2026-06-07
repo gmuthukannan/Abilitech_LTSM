@@ -201,11 +201,17 @@ def main():
         model.train()
         total_loss = 0.0
 
+        skipped = 0
         for padded, texts, input_lengths in train_dl:
             padded        = padded.to(device)
             input_lengths = input_lengths.to(device)
-            mask          = make_padding_mask(input_lengths, padded.size(1), device)
 
+            # Guard 1: skip batches with NaN/inf input features
+            if not torch.isfinite(padded).all():
+                skipped += 1
+                continue
+
+            mask      = make_padding_mask(input_lengths, padded.size(1), device)
             logits    = model(padded, src_key_padding_mask=mask)
             log_probs = F.log_softmax(logits, dim=-1).permute(1, 0, 2)
 
@@ -214,18 +220,30 @@ def main():
             targets        = torch.cat(encoded)
 
             loss = ctc_loss(log_probs, targets, input_lengths, target_lengths)
-            if torch.isnan(loss) or torch.isinf(loss):
+
+            # Guard 2: skip batches with NaN/inf loss
+            if not torch.isfinite(loss):
+                skipped += 1
                 continue
+
             opt.zero_grad()
             loss.backward()
             clip = 1.0 if args.model == "transformer" else 5.0
-            torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+
+            # Guard 3: skip if gradients are NaN/inf (prevents weight corruption)
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+            if not torch.isfinite(grad_norm):
+                opt.zero_grad()
+                skipped += 1
+                continue
+
             opt.step()
             total_loss += loss.item()
 
         avg = total_loss / len(train_dl)
         scheduler.step(avg)
-        print(f"Epoch {epoch:3d}  Loss: {avg:.4f}  LR: {opt.param_groups[0]['lr']:.2e}", end="")
+        skip_str = f"  skipped: {skipped}/{len(train_dl)}" if skipped else ""
+        print(f"Epoch {epoch:3d}  Loss: {avg:.4f}  LR: {opt.param_groups[0]['lr']:.2e}{skip_str}", end="")
 
         if (epoch + 1) % args.eval_every == 0 or epoch == args.epochs - 1:
             val_cer, val_wer = evaluate(model, val_dl, vocab, device)
