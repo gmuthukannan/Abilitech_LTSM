@@ -165,13 +165,16 @@ def main():
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
         model.load_state_dict(ckpt["model"])
+        if "optimizer" in ckpt:
+            opt.load_state_dict(ckpt["optimizer"])
+        if "scheduler" in ckpt:
+            scheduler.load_state_dict(ckpt["scheduler"])
         start_epoch = ckpt["epoch"] + 1
         best_cer    = ckpt.get("cer", float("inf"))
-        # Restore normalisation stats from checkpoint if present
         if "norm_mean" in ckpt and "norm_std" in ckpt:
             ds.set_norm_stats(ckpt["norm_mean"], ckpt["norm_std"])
             print(f"Restored norm stats from checkpoint")
-        print(f"Resumed from epoch {ckpt['epoch']}  (CER {best_cer:.4f})")
+        print(f"Resumed from epoch {ckpt['epoch']}  LR: {opt.param_groups[0]['lr']:.2e}  CER: {best_cer:.4f}")
 
     for epoch in range(start_epoch, args.epochs):
         model.train()
@@ -214,6 +217,8 @@ def main():
                     "wer":       val_wer,
                     "norm_mean": mean.cpu(),
                     "norm_std":  std.cpu(),
+                    "optimizer": opt.state_dict(),
+                    "scheduler": scheduler.state_dict(),
                 }, args.checkpoint)
                 print("  [saved]", end="")
 
