@@ -24,6 +24,8 @@ def parse_args():
                    help="Model architecture (default: transformer)")
     p.add_argument("--epochs", type=int, default=EPOCHS)
     p.add_argument("--batch",  type=int, default=BATCH_SIZE)
+    p.add_argument("--lr", type=float, default=None,
+                   help="Learning rate (default: 1e-4 for transformer, 1e-3 for bilstm)")
     p.add_argument("--checkpoint", default="model.pth")
     p.add_argument("--resume", default=None,
                    help="Path to checkpoint to resume training from")
@@ -170,7 +172,9 @@ def main():
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model: {args.model}  |  Parameters: {n_params:,}")
 
-    opt       = torch.optim.Adam(model.parameters(), lr=LR)
+    lr = args.lr if args.lr is not None else (1e-4 if args.model == "transformer" else LR)
+    print(f"Learning rate: {lr:.2e}")
+    opt       = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, patience=5, factor=0.5)
     ctc_loss  = torch.nn.CTCLoss(blank=0, zero_infinity=True)
 
@@ -212,9 +216,11 @@ def main():
             loss = ctc_loss(log_probs, targets, input_lengths, target_lengths)
             opt.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
+            clip = 1.0 if args.model == "transformer" else 5.0
+            torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
             opt.step()
-            total_loss += loss.item()
+            if not torch.isnan(loss):
+                total_loss += loss.item()
 
         avg = total_loss / len(train_dl)
         scheduler.step(avg)
