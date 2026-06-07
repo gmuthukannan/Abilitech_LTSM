@@ -53,7 +53,8 @@ def _load_openpose_clip(clip_dir):
         pose  = np.array(p.get("pose_keypoints_2d",       [0.0] * 75), dtype=np.float32)
         lhand = np.array(p.get("hand_left_keypoints_2d",  [0.0] * 63), dtype=np.float32)
         rhand = np.array(p.get("hand_right_keypoints_2d", [0.0] * 63), dtype=np.float32)
-        frames.append(np.concatenate([pose, lhand, rhand]))
+        frame = np.concatenate([pose, lhand, rhand])
+        frames.append(np.nan_to_num(frame, nan=0.0, posinf=0.0, neginf=0.0))
     if not frames:
         return np.zeros((1, OPENPOSE_FEATURES), dtype=np.float32)
     return np.stack(frames, axis=0)

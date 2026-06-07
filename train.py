@@ -214,13 +214,14 @@ def main():
             targets        = torch.cat(encoded)
 
             loss = ctc_loss(log_probs, targets, input_lengths, target_lengths)
+            if torch.isnan(loss) or torch.isinf(loss):
+                continue
             opt.zero_grad()
             loss.backward()
             clip = 1.0 if args.model == "transformer" else 5.0
             torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
             opt.step()
-            if not torch.isnan(loss):
-                total_loss += loss.item()
+            total_loss += loss.item()
 
         avg = total_loss / len(train_dl)
         scheduler.step(avg)
