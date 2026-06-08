@@ -95,6 +95,20 @@ def ctc_decode(log_probs, vocab):
 
 # ── Decoder teacher-forcing batch builder ─────────────────────────────────────
 
+def attn_greedy_decode(model, memory, memory_mask, vocab, max_len=300):
+    """Greedy autoregressive decode using the attention decoder."""
+    device = memory.device
+    tgt = torch.tensor([[vocab.sos_id]], device=device)
+    for _ in range(max_len):
+        logits   = model.attn_dec(tgt, memory,
+                                  memory_key_padding_mask=memory_mask)
+        next_tok = logits[0, -1].argmax(-1).item()
+        if next_tok == vocab.eos_id:
+            break
+        tgt = torch.cat([tgt, torch.tensor([[next_tok]], device=device)], dim=1)
+    return vocab.decode(tgt[0, 1:].tolist())
+
+
 def build_decoder_batch(encoded_seqs, vocab, device):
     """
     encoded_seqs: list of list[int] (character indices, no SOS/EOS)
@@ -117,7 +131,8 @@ def build_decoder_batch(encoded_seqs, vocab, device):
 
 def evaluate(model, loader, vocab, device):
     model.eval()
-    total_cer = total_wer = 0.0
+    total_ctc_cer = total_wer = total_attn_cer = 0.0
+    use_attn = hasattr(model, 'attn_dec')
     with torch.no_grad():
         for padded, texts, input_lengths in loader:
             padded        = padded.to(device)
@@ -128,14 +143,25 @@ def evaluate(model, loader, vocab, device):
             else:
                 out_lengths = input_lengths
                 mask = make_padding_mask(input_lengths, padded.size(1), device)
-            lp = F.log_softmax(model(padded, src_key_padding_mask=mask), dim=-1)
+            memory = model.encode(padded, mask) if use_attn else None
+            lp     = F.log_softmax(
+                model.ctc_fc(memory) if use_attn else model(padded, src_key_padding_mask=mask),
+                dim=-1
+            )
             for i, text in enumerate(texts):
-                pred   = ctc_decode(lp[i].cpu(), vocab)
                 target = text.upper()
-                total_cer += cer(pred, target)
-                total_wer += wer(pred, target)
+                ctc_pred = ctc_decode(lp[i].cpu(), vocab)
+                total_ctc_cer += cer(ctc_pred, target)
+                total_wer     += wer(ctc_pred, target)
+                if use_attn:
+                    mem_i = memory[i:i+1]
+                    msk_i = mask[i:i+1] if mask is not None else None
+                    attn_pred = attn_greedy_decode(model, mem_i, msk_i, vocab)
+                    total_attn_cer += cer(attn_pred, target)
     n = len(loader.dataset)
-    return total_cer / n, total_wer / n
+    if use_attn:
+        return total_ctc_cer / n, total_wer / n, total_attn_cer / n
+    return total_ctc_cer / n, total_wer / n, None
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -293,12 +319,14 @@ def main():
         print(f"Epoch {epoch:3d}  Loss: {avg:.4f}  LR: {opt.param_groups[0]['lr']:.2e}{skip_str}", end="")
 
         if (epoch + 1) % args.eval_every == 0 or epoch == args.epochs - 1:
-            val_cer, val_wer = evaluate(model, val_dl, vocab, device)
-            scheduler.step(val_cer)
-            print(f"  CER: {val_cer:.4f}  WER: {val_wer:.4f}", end="")
+            val_cer, val_wer, val_attn_cer = evaluate(model, val_dl, vocab, device)
+            best_eval_cer = min(val_cer, val_attn_cer) if val_attn_cer is not None else val_cer
+            scheduler.step(best_eval_cer)
+            attn_str = f"  ATT-CER: {val_attn_cer:.4f}" if val_attn_cer is not None else ""
+            print(f"  CTC-CER: {val_cer:.4f}  WER: {val_wer:.4f}{attn_str}", end="")
 
-            if val_cer < best_cer:
-                best_cer = val_cer
+            if best_eval_cer < best_cer:
+                best_cer = best_eval_cer
                 torch.save({
                     "epoch":      epoch,
                     "model":      model.state_dict(),
