@@ -78,7 +78,8 @@ class TransformerSignModel(nn.Module):
             dropout=dropout, batch_first=True,
             norm_first=True,   # Pre-LN: more stable CTC training
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers,
+                                                  enable_nested_tensor=False)
         self.fc      = nn.Linear(d_model, out_size)
 
     def forward(self, x, src_key_padding_mask=None):

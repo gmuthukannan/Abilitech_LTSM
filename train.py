@@ -181,7 +181,7 @@ def main():
     lr = args.lr if args.lr is not None else (1e-4 if args.model == "transformer" else LR)
     print(f"Learning rate: {lr:.2e}")
     opt       = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, patience=5, factor=0.5)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, patience=10, factor=0.5, mode='min')
     ctc_loss  = torch.nn.CTCLoss(blank=0, zero_infinity=True)
 
     start_epoch = 0
@@ -206,6 +206,7 @@ def main():
     for epoch in range(start_epoch, args.epochs):
         model.train()
         total_loss = 0.0
+        num_valid = 0
 
         skipped = 0
         for padded, texts, input_lengths in train_dl:
@@ -252,14 +253,15 @@ def main():
 
             opt.step()
             total_loss += loss.item()
+            num_valid += 1
 
-        avg = total_loss / len(train_dl)
-        scheduler.step(avg)
+        avg = total_loss / max(num_valid, 1)
         skip_str = f"  skipped: {skipped}/{len(train_dl)}" if skipped else ""
         print(f"Epoch {epoch:3d}  Loss: {avg:.4f}  LR: {opt.param_groups[0]['lr']:.2e}{skip_str}", end="")
 
         if (epoch + 1) % args.eval_every == 0 or epoch == args.epochs - 1:
             val_cer, val_wer = evaluate(model, val_dl, vocab, device)
+            scheduler.step(val_cer)  # step on val CER, not noisy train loss
             print(f"  CER: {val_cer:.4f}  WER: {val_wer:.4f}", end="")
 
             if val_cer < best_cer:
