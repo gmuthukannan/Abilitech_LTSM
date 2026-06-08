@@ -7,34 +7,28 @@ from vocab import Vocab
 from model import SignModel, TransformerSignModel, POSE_FEATURES
 
 BATCH_SIZE = 16
-EPOCHS = 50
-LR = 1e-3
+EPOCHS     = 50
+LR         = 1e-3
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--keypoints", default=None,
-                   help="Path to extracted How2Sign keypoints dir")
-    p.add_argument("--csv", default=None,
-                   help="How2Sign annotation CSV path")
-    p.add_argument("--fake", default="dataset",
-                   help="Fake local dataset dir (default: dataset/)")
-    p.add_argument("--model", default="transformer",
-                   choices=["bilstm", "transformer"],
-                   help="Model architecture (default: transformer)")
-    p.add_argument("--epochs", type=int, default=EPOCHS)
-    p.add_argument("--batch",  type=int, default=BATCH_SIZE)
-    p.add_argument("--lr", type=float, default=None,
+    p.add_argument("--keypoints",   default=None)
+    p.add_argument("--csv",         default=None)
+    p.add_argument("--fake",        default="dataset")
+    p.add_argument("--model",       default="transformer",
+                   choices=["bilstm", "transformer"])
+    p.add_argument("--epochs",      type=int,   default=EPOCHS)
+    p.add_argument("--batch",       type=int,   default=BATCH_SIZE)
+    p.add_argument("--lr",          type=float, default=None,
                    help="Learning rate (default: 1e-4 for transformer, 1e-3 for bilstm)")
-    p.add_argument("--checkpoint", default="model.pth")
-    p.add_argument("--resume", default=None,
-                   help="Path to checkpoint to resume training from")
-    p.add_argument("--val_split", type=float, default=0.1,
-                   help="Fraction of data held out for validation (default: 0.1)")
-    p.add_argument("--eval_every", type=int, default=5,
-                   help="Run CER/WER eval every N epochs (default: 5)")
-    p.add_argument("--norm_samples", type=int, default=2000,
-                   help="Number of training clips to sample for normalisation stats")
+    p.add_argument("--attn_weight", type=float, default=0.7,
+                   help="Fraction of loss from attention decoder (default: 0.7)")
+    p.add_argument("--checkpoint",  default="model.pth")
+    p.add_argument("--resume",      default=None)
+    p.add_argument("--val_split",   type=float, default=0.1)
+    p.add_argument("--eval_every",  type=int,   default=5)
+    p.add_argument("--norm_samples",type=int,   default=2000)
     return p.parse_args()
 
 
@@ -45,27 +39,22 @@ def collate_fn(batch):
     return padded, texts, input_lengths
 
 
-def make_padding_mask(input_lengths, max_len, device):
-    """Boolean mask (batch, max_len): True where frames are padding."""
-    return torch.arange(max_len, device=device).unsqueeze(0) >= input_lengths.unsqueeze(1).to(device)
+def make_padding_mask(lengths, max_len, device):
+    """Boolean mask (batch, max_len): True where positions are padding."""
+    return torch.arange(max_len, device=device).unsqueeze(0) >= lengths.to(device).unsqueeze(1)
 
 
 # ── Normalisation ─────────────────────────────────────────────────────────────
 
 def compute_norm_stats(dataset, train_indices, max_samples=2000):
-    """Compute per-feature mean and std from a sample of training clips."""
-    indices = list(train_indices)[:max_samples]
-    all_frames = []
-    for i in indices:
-        pose, _ = dataset[i]
-        all_frames.append(pose)
-    all_frames = torch.cat(all_frames, dim=0)  # (total_frames, features)
+    indices   = list(train_indices)[:max_samples]
+    all_frames = torch.cat([dataset[i][0] for i in indices], dim=0)
     mean = all_frames.mean(0)
     std  = all_frames.std(0).clamp(min=1e-6)
     return mean, std
 
 
-# ── Metrics ──────────────────────────────────────────────────────────────────
+# ── Metrics ───────────────────────────────────────────────────────────────────
 
 def _edit_distance(a, b):
     m, n = len(a), len(b)
@@ -74,18 +63,18 @@ def _edit_distance(a, b):
         prev, dp[0] = dp[0], i
         for j in range(1, n + 1):
             temp = dp[j]
-            dp[j] = prev if a[i - 1] == b[j - 1] else 1 + min(prev, dp[j], dp[j - 1])
+            dp[j] = prev if a[i-1] == b[j-1] else 1 + min(prev, dp[j], dp[j-1])
             prev = temp
     return dp[n]
 
 
-def cer(pred: str, target: str) -> float:
+def cer(pred, target):
     if not target:
         return 0.0 if not pred else 1.0
     return _edit_distance(list(pred), list(target)) / len(target)
 
 
-def wer(pred: str, target: str) -> float:
+def wer(pred, target):
     p_words, t_words = pred.split(), target.split()
     if not t_words:
         return 0.0 if not p_words else 1.0
@@ -104,6 +93,26 @@ def ctc_decode(log_probs, vocab):
     return vocab.decode(result)
 
 
+# ── Decoder teacher-forcing batch builder ─────────────────────────────────────
+
+def build_decoder_batch(encoded_seqs, vocab, device):
+    """
+    encoded_seqs: list of list[int] (character indices, no SOS/EOS)
+    Returns:
+        tgt_in  (batch, L)   — [SOS, c1, c2, ...]
+        tgt_out (batch, L)   — [c1, c2, ..., EOS], padding=-100 (ignored by CE)
+        tgt_pad_mask (batch, L) — True where padding
+    """
+    sos, eos = vocab.sos_id, vocab.eos_id
+    ins  = [torch.tensor([sos] + e,        dtype=torch.long) for e in encoded_seqs]
+    outs = [torch.tensor(e       + [eos],  dtype=torch.long) for e in encoded_seqs]
+    lens = torch.tensor([len(e) + 1 for e in encoded_seqs], dtype=torch.long)
+    tgt_in  = pad_sequence(ins,  batch_first=True, padding_value=0   ).to(device)
+    tgt_out = pad_sequence(outs, batch_first=True, padding_value=-100).to(device)
+    tgt_pad = make_padding_mask(lens, tgt_in.size(1), device)
+    return tgt_in, tgt_out, tgt_pad
+
+
 # ── Validation loop ───────────────────────────────────────────────────────────
 
 def evaluate(model, loader, vocab, device):
@@ -111,15 +120,15 @@ def evaluate(model, loader, vocab, device):
     total_cer = total_wer = 0.0
     with torch.no_grad():
         for padded, texts, input_lengths in loader:
-            padded = padded.to(device)
+            padded        = padded.to(device)
             input_lengths = input_lengths.to(device)
             if hasattr(model, 'subsampled_lengths'):
                 out_lengths = model.subsampled_lengths(input_lengths)
-                sub_T = (padded.size(1) + 1) // 2
-                mask  = make_padding_mask(out_lengths, sub_T, device)
+                mask = make_padding_mask(out_lengths, (padded.size(1)+1)//2, device)
             else:
-                mask  = make_padding_mask(input_lengths, padded.size(1), device)
-            lp     = F.log_softmax(model(padded, src_key_padding_mask=mask), dim=-1)
+                out_lengths = input_lengths
+                mask = make_padding_mask(input_lengths, padded.size(1), device)
+            lp = F.log_softmax(model(padded, src_key_padding_mask=mask), dim=-1)
             for i, text in enumerate(texts):
                 pred   = ctc_decode(lp[i].cpu(), vocab)
                 target = text.upper()
@@ -142,12 +151,12 @@ def main():
         print(f"How2Sign dataset: {len(ds)} clips")
     else:
         ds = SignDataset(args.fake)
-        print(f"Fake dataset: {len(ds)} samples (use --keypoints + --csv for real data)")
+        print(f"Fake dataset: {len(ds)} samples")
 
     vocab = Vocab()
     for _, t in ds:
         vocab.add(t)
-    print(f"Vocab: {len(vocab)} tokens")
+    print(f"Vocab: {len(vocab)} tokens  (blank=0, sos=1, eos=2, chars=3..{len(vocab)-1})")
 
     val_size   = max(1, int(args.val_split * len(ds)))
     train_size = len(ds) - val_size
@@ -157,11 +166,11 @@ def main():
     )
     print(f"Split: {train_size} train / {val_size} val")
 
-    print(f"Computing normalisation stats from up to {args.norm_samples} training clips...")
-    mean, std = compute_norm_stats(ds, train_ds.indices, max_samples=args.norm_samples)
+    print(f"Computing normalisation stats from up to {args.norm_samples} clips...")
+    mean, std = compute_norm_stats(ds, train_ds.indices, args.norm_samples)
     ds.set_norm_stats(mean, std)
-    print(f"  Feature mean range: [{mean.min():.3f}, {mean.max():.3f}]  "
-          f"std range: [{std.min():.3f}, {std.max():.3f}]")
+    print(f"  mean range [{mean.min():.3f}, {mean.max():.3f}]  "
+          f"std range [{std.min():.3f}, {std.max():.3f}]")
 
     train_dl = DataLoader(train_ds, batch_size=args.batch, shuffle=True,
                           collate_fn=collate_fn, num_workers=4, pin_memory=True)
@@ -177,12 +186,17 @@ def main():
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model: {args.model}  |  Parameters: {n_params:,}")
+    if args.model == "transformer":
+        print(f"Attention decoder weight: {args.attn_weight}  "
+              f"CTC weight: {1-args.attn_weight}")
 
-    lr = args.lr if args.lr is not None else (1e-4 if args.model == "transformer" else LR)
+    lr        = args.lr if args.lr is not None else (1e-4 if args.model == "transformer" else LR)
     print(f"Learning rate: {lr:.2e}")
     opt       = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, patience=10, factor=0.5, mode='min')
-    ctc_loss  = torch.nn.CTCLoss(blank=0, zero_infinity=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        opt, patience=10, factor=0.5, mode='min'
+    )
+    ctc_loss_fn = torch.nn.CTCLoss(blank=0, zero_infinity=True)
 
     start_epoch = 0
     best_cer    = float("inf")
@@ -190,15 +204,11 @@ def main():
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
         model.load_state_dict(ckpt["model"])
-        if "optimizer" in ckpt:
-            opt.load_state_dict(ckpt["optimizer"])
-        if "scheduler" in ckpt:
-            scheduler.load_state_dict(ckpt["scheduler"])
+        if "optimizer"  in ckpt: opt.load_state_dict(ckpt["optimizer"])
+        if "scheduler"  in ckpt: scheduler.load_state_dict(ckpt["scheduler"])
+        if "norm_mean"  in ckpt: ds.set_norm_stats(ckpt["norm_mean"], ckpt["norm_std"])
         start_epoch = ckpt["epoch"] + 1
         best_cer    = ckpt.get("cer", float("inf"))
-        if "norm_mean" in ckpt and "norm_std" in ckpt:
-            ds.set_norm_stats(ckpt["norm_mean"], ckpt["norm_std"])
-            print("Restored norm stats from checkpoint")
         print(f"Resumed from epoch {ckpt['epoch']}  "
               f"LR: {opt.param_groups[0]['lr']:.2e}  CER: {best_cer:.4f}")
 
@@ -206,18 +216,18 @@ def main():
     for epoch in range(start_epoch, args.epochs):
         model.train()
         total_loss = 0.0
-        num_valid = 0
+        num_valid  = 0
+        skipped    = 0
 
-        skipped = 0
         for padded, texts, input_lengths in train_dl:
             padded        = padded.to(device)
             input_lengths = input_lengths.to(device)
 
-            # Guard 1: skip batches with NaN/inf input features
             if not torch.isfinite(padded).all():
                 skipped += 1
                 continue
 
+            # Compute encoder output lengths and padding mask
             if hasattr(model, 'subsampled_lengths'):
                 ctc_lengths = model.subsampled_lengths(input_lengths)
                 sub_T = (padded.size(1) + 1) // 2
@@ -226,16 +236,41 @@ def main():
                 ctc_lengths = input_lengths
                 mask = make_padding_mask(input_lengths, padded.size(1), device)
 
-            logits    = model(padded, src_key_padding_mask=mask)
-            log_probs = F.log_softmax(logits, dim=-1).permute(1, 0, 2)
-
-            encoded        = [torch.tensor(vocab.encode(t), dtype=torch.long) for t in texts]
+            # Encode targets
+            encoded        = [vocab.encode(t) for t in texts]
             target_lengths = torch.tensor([len(e) for e in encoded], dtype=torch.long)
-            targets        = torch.cat(encoded)
+            targets        = torch.cat([torch.tensor(e, dtype=torch.long) for e in encoded])
 
-            loss = ctc_loss(log_probs, targets, ctc_lengths, target_lengths)
+            # ── Forward pass ──────────────────────────────────────────────
+            if hasattr(model, 'forward_train'):
+                # Transformer: hybrid CTC + Attention
+                tgt_in, tgt_out, tgt_pad = build_decoder_batch(encoded, vocab, device)
+                ctc_logits, attn_logits  = model.forward_train(
+                    padded, tgt_in,
+                    src_key_padding_mask=mask,
+                    tgt_key_padding_mask=tgt_pad,
+                )
+                log_probs    = F.log_softmax(ctc_logits, dim=-1).permute(1, 0, 2)
+                ctc_loss_val = ctc_loss_fn(log_probs, targets, ctc_lengths, target_lengths)
+                attn_loss_val = F.cross_entropy(
+                    attn_logits.reshape(-1, len(vocab)),
+                    tgt_out.reshape(-1),
+                    ignore_index=-100,
+                )
+                # Normalise CTC by avg target length so both losses are on same scale
+                ctc_norm = ctc_loss_val / target_lengths.float().mean().clamp(min=1)
+                if torch.isfinite(ctc_norm) and torch.isfinite(attn_loss_val):
+                    loss = (1 - args.attn_weight) * ctc_norm + args.attn_weight * attn_loss_val
+                elif torch.isfinite(attn_loss_val):
+                    loss = attn_loss_val
+                else:
+                    loss = ctc_norm
+            else:
+                # BiLSTM: CTC only
+                logits    = model(padded, src_key_padding_mask=mask)
+                log_probs = F.log_softmax(logits, dim=-1).permute(1, 0, 2)
+                loss      = ctc_loss_fn(log_probs, targets, ctc_lengths, target_lengths)
 
-            # Guard 2: skip batches with NaN/inf loss
             if not torch.isfinite(loss):
                 skipped += 1
                 continue
@@ -243,8 +278,6 @@ def main():
             opt.zero_grad()
             loss.backward()
             clip = 1.0 if args.model == "transformer" else 5.0
-
-            # Guard 3: skip if gradients are NaN/inf (prevents weight corruption)
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
             if not torch.isfinite(grad_norm):
                 opt.zero_grad()
@@ -253,15 +286,15 @@ def main():
 
             opt.step()
             total_loss += loss.item()
-            num_valid += 1
+            num_valid  += 1
 
-        avg = total_loss / max(num_valid, 1)
+        avg      = total_loss / max(num_valid, 1)
         skip_str = f"  skipped: {skipped}/{len(train_dl)}" if skipped else ""
         print(f"Epoch {epoch:3d}  Loss: {avg:.4f}  LR: {opt.param_groups[0]['lr']:.2e}{skip_str}", end="")
 
         if (epoch + 1) % args.eval_every == 0 or epoch == args.epochs - 1:
             val_cer, val_wer = evaluate(model, val_dl, vocab, device)
-            scheduler.step(val_cer)  # step on val CER, not noisy train loss
+            scheduler.step(val_cer)
             print(f"  CER: {val_cer:.4f}  WER: {val_wer:.4f}", end="")
 
             if val_cer < best_cer:
