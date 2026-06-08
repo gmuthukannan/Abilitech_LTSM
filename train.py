@@ -112,7 +112,13 @@ def evaluate(model, loader, vocab, device):
     with torch.no_grad():
         for padded, texts, input_lengths in loader:
             padded = padded.to(device)
-            mask   = make_padding_mask(input_lengths, padded.size(1), device)
+            input_lengths = input_lengths.to(device)
+            if hasattr(model, 'subsampled_lengths'):
+                out_lengths = model.subsampled_lengths(input_lengths)
+                sub_T = (padded.size(1) + 1) // 2
+                mask  = make_padding_mask(out_lengths, sub_T, device)
+            else:
+                mask  = make_padding_mask(input_lengths, padded.size(1), device)
             lp     = F.log_softmax(model(padded, src_key_padding_mask=mask), dim=-1)
             for i, text in enumerate(texts):
                 pred   = ctc_decode(lp[i].cpu(), vocab)
@@ -211,7 +217,14 @@ def main():
                 skipped += 1
                 continue
 
-            mask      = make_padding_mask(input_lengths, padded.size(1), device)
+            if hasattr(model, 'subsampled_lengths'):
+                ctc_lengths = model.subsampled_lengths(input_lengths)
+                sub_T = (padded.size(1) + 1) // 2
+                mask  = make_padding_mask(ctc_lengths, sub_T, device)
+            else:
+                ctc_lengths = input_lengths
+                mask = make_padding_mask(input_lengths, padded.size(1), device)
+
             logits    = model(padded, src_key_padding_mask=mask)
             log_probs = F.log_softmax(logits, dim=-1).permute(1, 0, 2)
 
@@ -219,7 +232,7 @@ def main():
             target_lengths = torch.tensor([len(e) for e in encoded], dtype=torch.long)
             targets        = torch.cat(encoded)
 
-            loss = ctc_loss(log_probs, targets, input_lengths, target_lengths)
+            loss = ctc_loss(log_probs, targets, ctc_lengths, target_lengths)
 
             # Guard 2: skip batches with NaN/inf loss
             if not torch.isfinite(loss):

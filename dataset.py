@@ -80,8 +80,8 @@ class How2SignDataset(Dataset):
             if not sentence:
                 skipped_missing += 1
                 continue
-            # CTC requires input_length >= target_length
-            if n_frames < len(sentence):
+            # After 2x subsampling: output_T = ceil(n_frames/2) >= len(sentence)
+            if (n_frames + 1) // 2 < len(sentence):
                 skipped_ctc += 1
                 continue
             self.samples.append((clip_dir, sentence))
