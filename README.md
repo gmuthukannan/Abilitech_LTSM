@@ -103,19 +103,22 @@ pip install -r requirements.txt
 ```bash
 mkdir -p checkpoints
 
-# Phase 2 — Transformer (default)
+# Phase 2 — Transformer hybrid CTC+Attention (default)
 python3 train.py \
   --keypoints /data/how2sign/ \
   --csv       /data/how2sign/train_labels.csv \
   --model     transformer \
   --epochs    200 \
   --batch     64 \
-  --checkpoint checkpoints/model_transformer.pth
+  --checkpoint checkpoints/model_hybrid.pth
 ```
 
-**Check the output line:** `Model: transformer  |  Parameters: ~6M` confirms Phase 2 is running.
+**Check the output line:** `Model: transformer  |  Parameters: ~5.5M` confirms Phase 2 is running.
 
 ### Resume after interruption
+
+Only use `--resume` if the checkpoint file **actually exists** on the instance.
+If you are on a fresh instance, omit `--resume` and start a new run.
 
 ```bash
 python3 train.py \
@@ -124,8 +127,8 @@ python3 train.py \
   --model     transformer \
   --epochs    200 \
   --batch     64 \
-  --checkpoint checkpoints/model_transformer.pth \
-  --resume    checkpoints/model_transformer.pth
+  --checkpoint checkpoints/model_hybrid.pth \
+  --resume    checkpoints/model_hybrid.pth
 ```
 
 > **Note:** Only resume from a checkpoint trained with character-level vocab. Do not resume from an old word-level checkpoint — the model output dimension will mismatch (~26,940 vs ~30).
@@ -134,12 +137,21 @@ python3 train.py \
 
 ## 9. Save Checkpoint Before Deleting Instance
 
-```bash
-# Option A — copy to local machine
-brev scp asl-train:~/asl/checkpoints/model_char.pth ./checkpoints/
+**Do this before `brev stop` — checkpoints are lost when the instance is deleted.**
 
-# Option B — push to GCS
-gsutil cp ~/asl/checkpoints/model_char.pth gs://abilitechhow2sign/checkpoints/
+```bash
+# Option A — push to GCS (recommended, instant)
+gsutil cp ~/asl/checkpoints/model_hybrid.pth gs://abilitechhow2sign/checkpoints/model_hybrid.pth
+
+# Option B — copy to local machine
+brev scp asl-train:~/asl/checkpoints/model_hybrid.pth ./checkpoints/
+```
+
+To restore a GCS checkpoint on a new instance:
+
+```bash
+mkdir -p ~/asl/checkpoints
+gsutil cp gs://abilitechhow2sign/checkpoints/model_hybrid.pth ~/asl/checkpoints/
 ```
 
 ---
