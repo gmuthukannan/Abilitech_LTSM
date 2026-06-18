@@ -233,6 +233,11 @@ def main():
         if "optimizer"  in ckpt: opt.load_state_dict(ckpt["optimizer"])
         if "scheduler"  in ckpt: scheduler.load_state_dict(ckpt["scheduler"])
         if "norm_mean"  in ckpt: ds.set_norm_stats(ckpt["norm_mean"], ckpt["norm_std"])
+        # Override LR if explicitly passed — load_state_dict restores the old LR otherwise
+        if args.lr is not None:
+            for pg in opt.param_groups:
+                pg['lr'] = args.lr
+            scheduler._last_lr = [args.lr]
         start_epoch = ckpt["epoch"] + 1
         best_cer    = ckpt.get("cer", float("inf"))
         print(f"Resumed from epoch {ckpt['epoch']}  "
