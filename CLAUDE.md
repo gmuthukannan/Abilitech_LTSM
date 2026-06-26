@@ -200,23 +200,16 @@ pip install -r requirements.txt
 
 ## Running on NVIDIA Brev (H100)
 
-### 1. Launch an instance
+### 1. Launch an instance (local machine)
 
 ```bash
-# List available Launchables / instances
-brev ls
-
-# Create a new H100 instance (choose a name)
 brev create asl-train --instance-type g6e.12xlarge
-# or pick the H100 SKU shown in `brev ls --instance-types`
-
-# Check it is running
-brev ls
+brev ls   # wait until status = running
 ```
 
-> If you are using an NVIDIA Incubator Launchable, you can also spin up directly from the Brev console at [console.brev.dev](https://console.brev.dev) and select the H100 SXM instance, then SSH in with the steps below.
+> You can also spin up from the Brev console at [console.brev.dev](https://console.brev.dev) and SSH in with the steps below.
 
-### 2. Open a shell
+### 2. Open a shell (local machine)
 
 ```bash
 brev shell asl-train
@@ -224,75 +217,93 @@ brev shell asl-train
 brev open asl-train   # opens VS Code remote
 ```
 
-### 3. Pull training data from GCloud
-
-Inside the Brev shell:
+### 3. Authenticate GCloud (one-time per instance)
 
 ```bash
-# Authenticate (one-time per instance)
 gcloud auth login
 gcloud config set project <your-project-id>
-
-# Pull How2Sign keypoints (OpenPose JSON, ~several GB)
-gsutil -m cp -r gs://abilitechhow2sign/train_2D_keypoints /data/how2sign/
-
-# Pull annotation CSV
-gsutil cp gs://abilitechhow2sign/train_labels_v1.csv /data/how2sign/
 ```
 
-If `gcloud` is not installed on the instance:
+If `gcloud` is not installed:
 ```bash
 curl https://sdk.cloud.google.com | bash
 exec -l $SHELL
 gcloud init
 ```
 
-### 4. Clone repo and install dependencies
+### 4. Pull training data from GCloud
 
 ```bash
-git clone <your-repo-url> ~/asl
+# Create the data directory first
+sudo mkdir -p /data/how2sign
+sudo chmod 777 /data/how2sign
+
+# Download keypoints archive (~several GB)
+gsutil cp gs://abilitechhow2sign/train_2D_keypoints.tar.gz /data/how2sign/train_2D_keypoints.tar.gz
+
+# Extract
+tar -xzf /data/how2sign/train_2D_keypoints.tar.gz -C /data/how2sign/
+
+# Download annotation CSV
+gsutil cp gs://abilitechhow2sign/train_labels_v1.csv /data/how2sign/
+```
+
+### 5. Pull the latest checkpoint from GCloud
+
+```bash
+mkdir -p ~/asl/checkpoints
+gsutil cp gs://abilitechhow2sign/checkpoints/model_hybrid.pth ~/asl/checkpoints/
+```
+
+### 6. Set up repo and Python environment
+
+If the repo is already cloned, just pull latest changes:
+```bash
+cd ~/asl && git pull
+```
+
+Otherwise clone fresh:
+```bash
+git clone https://github.com/gmuthukannan/Abilitech_LTSM ~/asl
 cd ~/asl
+```
+
+Create a virtualenv (required — the system Python is externally managed):
+```bash
+python3 -m venv ~/asl/venv
+source ~/asl/venv/bin/activate
+echo "source ~/asl/venv/bin/activate" >> ~/.bashrc   # auto-activate on reconnect
 
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 ```
 
-### 5. Run training
+### 7. Resume training
 
 ```bash
+cd ~/asl
 python train.py \
   --keypoints /data/how2sign/train_2D_keypoints/ \
   --csv       /data/how2sign/train_labels_v1.csv \
-  --epochs    50 \
+  --model     transformer \
   --batch     64 \
-  --checkpoint checkpoints/model_h100.pth
-
-# Resume after interruption
-python train.py \
-  --keypoints /data/how2sign/train_2D_keypoints/ \
-  --csv       /data/how2sign/train_labels_v1.csv \
-  --resume    checkpoints/model_h100.pth
+  --checkpoint checkpoints/model_hybrid.pth \
+  --resume    checkpoints/model_hybrid.pth
 ```
 
-> On H100, batch size 64–128 is safe. The model is small (~5M params) so the GPU will be underutilised — this is fine for Phase 1 baseline.
+> On H100, batch size 64–128 is safe. Both `--checkpoint` and `--resume` point to the same file so best checkpoints overwrite in-place. Use a different `--checkpoint` path (e.g. `model_hybrid_v2.pth`) to preserve the original.
 
-### 6. Copy checkpoint back (optional)
+### 8. Push checkpoint back to GCloud
 
 ```bash
-# From your local machine
-brev scp asl-train:~/asl/checkpoints/model_h100.pth ./checkpoints/
-
-# Or push to GCloud directly from the instance
-gsutil cp checkpoints/model_h100.pth gs://abilitechhow2sign/checkpoints/
+gsutil cp ~/asl/checkpoints/model_hybrid.pth gs://abilitechhow2sign/checkpoints/model_hybrid.pth
 ```
 
-### 7. Stop the instance when done
+### 9. Stop the instance when done (local machine)
 
 ```bash
-# From local machine
 brev stop asl-train
-# Delete to avoid charges
-brev delete asl-train
+brev delete asl-train   # only when fully done to avoid charges
 ```
 
 ---
