@@ -251,21 +251,21 @@ gsutil cp gs://abilitechhow2sign/train_labels.csv /data/how2sign/
 ### 5. Pull the latest checkpoint from GCloud
 
 ```bash
-mkdir -p ~/asl/checkpoints
-gsutil cp gs://abilitechhow2sign/checkpoints/model_hybrid.pth ~/asl/checkpoints/
+mkdir -p ~/Abilitech_LTSM/checkpoints
+gsutil cp gs://abilitechhow2sign/checkpoints/model_hybrid.pth ~/Abilitech_LTSM/checkpoints/model_hybrid.pth
 ```
 
 ### 6. Set up repo and Python environment
 
 If the repo is already cloned, just pull latest changes:
 ```bash
-cd ~/asl && git pull
+cd ~/Abilitech_LTSM && git pull
 ```
 
 Otherwise clone fresh:
 ```bash
-git clone https://github.com/gmuthukannan/Abilitech_LTSM ~/asl
-cd ~/asl
+git clone https://github.com/gmuthukannan/Abilitech_LTSM ~/Abilitech_LTSM
+cd ~/Abilitech_LTSM
 ```
 
 Create a virtualenv (required — the system Python is externally managed):
@@ -282,7 +282,7 @@ pip install -r requirements.txt
 ### 7. Resume training
 
 ```bash
-cd ~/asl
+cd ~/Abilitech_LTSM
 python train.py \
   --keypoints /data/how2sign/ \
   --csv       /data/how2sign/train_labels.csv \
