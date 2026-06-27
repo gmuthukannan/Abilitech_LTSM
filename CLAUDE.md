@@ -284,8 +284,8 @@ pip install -r requirements.txt
 ```bash
 cd ~/asl
 python train.py \
-  --keypoints /data/how2sign/train_2D_keypoints/ \
-  --csv       /data/how2sign/train_labels_v1.csv \
+  --keypoints /data/how2sign/ \
+  --csv       /data/how2sign/train_labels.csv \
   --model     transformer \
   --batch     64 \
   --checkpoint checkpoints/model_hybrid.pth \
