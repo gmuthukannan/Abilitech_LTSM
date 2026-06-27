@@ -245,7 +245,7 @@ gsutil cp gs://abilitechhow2sign/train_2D_keypoints.tar.gz /data/how2sign/train_
 tar -xzf /data/how2sign/train_2D_keypoints.tar.gz -C /data/how2sign/
 
 # Download annotation CSV
-gsutil cp gs://abilitechhow2sign/train_labels_v1.csv /data/how2sign/
+gsutil cp gs://abilitechhow2sign/train_labels.csv /data/how2sign/
 ```
 
 ### 5. Pull the latest checkpoint from GCloud
@@ -270,6 +270,7 @@ cd ~/asl
 
 Create a virtualenv (required — the system Python is externally managed):
 ```bash
+sudo apt install python3.12-venv -y
 python3 -m venv ~/asl/venv
 source ~/asl/venv/bin/activate
 echo "source ~/asl/venv/bin/activate" >> ~/.bashrc   # auto-activate on reconnect
