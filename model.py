@@ -87,7 +87,7 @@ class AttentionDecoder(nn.Module):
         # memory: (batch, T, d_model) encoder output
         L = tgt.size(1)
         causal_mask = nn.Transformer.generate_square_subsequent_mask(
-            L, device=tgt.device
+            L, device=tgt.device, dtype=torch.bool
         )
         x = self.pos_enc(self.embed(tgt))
         x = self.decoder(
