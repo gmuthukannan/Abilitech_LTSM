@@ -180,8 +180,17 @@ def main():
         print(f"Fake dataset: {len(ds)} samples")
 
     vocab = Vocab()
-    for _, t in ds:
-        vocab.add(t)
+    if args.resume and os.path.exists(args.resume):
+        # Restore vocab from checkpoint so model is built with the correct size
+        _peek = torch.load(args.resume, map_location="cpu")
+        w2i = _peek["vocab"]
+        vocab.w2i = w2i
+        vocab.i2w = {v: k for k, v in w2i.items()}
+        vocab.idx = max(w2i.values()) + 1
+        del _peek
+    else:
+        for _, t in ds:
+            vocab.add(t)
     print(f"Vocab: {len(vocab)} tokens  (blank=0, sos=1, eos=2, chars=3..{len(vocab)-1})")
 
     val_size   = max(1, int(args.val_split * len(ds)))
