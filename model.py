@@ -27,20 +27,20 @@ class SignModel(nn.Module):
 # ── Phase 2: Transformer Encoder + Attention Decoder ─────────────────────────
 
 class Conv1DSubsampler(nn.Module):
-    """2x temporal downsampling via stride-2 Conv1D."""
+    """stride-1 Conv1D: mixes local features without reducing temporal length."""
     def __init__(self, in_size, d_model, dropout=0.1):
         super().__init__()
-        self.conv = nn.Conv1d(in_size, d_model, kernel_size=3, stride=2, padding=1)
+        self.conv = nn.Conv1d(in_size, d_model, kernel_size=3, stride=1, padding=1)
         self.act  = nn.ReLU()
         self.drop = nn.Dropout(p=dropout)
         self.proj = nn.Linear(d_model, d_model)
 
     def forward(self, x):
-        x = self.conv(x.transpose(1, 2)).transpose(1, 2)  # (batch, T//2, d_model)
+        x = self.conv(x.transpose(1, 2)).transpose(1, 2)  # (batch, T, d_model)
         return self.proj(self.drop(self.act(x)))
 
     def output_lengths(self, input_lengths):
-        return (input_lengths + 1) // 2
+        return input_lengths
 
 
 class PositionalEncoding(nn.Module):

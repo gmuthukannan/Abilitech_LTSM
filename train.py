@@ -139,7 +139,8 @@ def evaluate(model, loader, vocab, device):
             input_lengths = input_lengths.to(device)
             if hasattr(model, 'subsampled_lengths'):
                 out_lengths = model.subsampled_lengths(input_lengths)
-                mask = make_padding_mask(out_lengths, (padded.size(1)+1)//2, device)
+                sub_T = model.subsampled_lengths(input_lengths.new_tensor([padded.size(1)])).item()
+                mask = make_padding_mask(out_lengths, sub_T, device)
             else:
                 out_lengths = input_lengths
                 mask = make_padding_mask(input_lengths, padded.size(1), device)
@@ -270,7 +271,7 @@ def main():
             # Compute encoder output lengths and padding mask
             if hasattr(model, 'subsampled_lengths'):
                 ctc_lengths = model.subsampled_lengths(input_lengths)
-                sub_T = (padded.size(1) + 1) // 2
+                sub_T = model.subsampled_lengths(input_lengths.new_tensor([padded.size(1)])).item()
                 mask  = make_padding_mask(ctc_lengths, sub_T, device)
             else:
                 ctc_lengths = input_lengths
