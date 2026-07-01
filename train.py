@@ -214,8 +214,8 @@ def main():
                           collate_fn=collate_fn, num_workers=4, pin_memory=True)
 
     if args.model == "transformer":
-        model = TransformerSignModel(POSE_FEATURES, d_model=256, nhead=4,
-                                     num_layers=4, dim_feedforward=1024,
+        model = TransformerSignModel(POSE_FEATURES, d_model=512, nhead=8,
+                                     num_layers=6, dim_feedforward=2048,
                                      dropout=0.1, out_size=len(vocab)).to(device)
     else:
         model = SignModel(POSE_FEATURES, hidden=256, out_size=len(vocab)).to(device)
