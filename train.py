@@ -29,6 +29,8 @@ def parse_args():
     p.add_argument("--val_split",   type=float, default=0.1)
     p.add_argument("--eval_every",  type=int,   default=5)
     p.add_argument("--norm_samples",type=int,   default=2000)
+    p.add_argument("--scheduler",   default="cosine", choices=["cosine", "plateau"],
+                   help="LR scheduler: cosine (CosineAnnealingLR) or plateau (ReduceLROnPlateau)")
     return p.parse_args()
 
 
@@ -214,8 +216,8 @@ def main():
                           collate_fn=collate_fn, num_workers=4, pin_memory=True)
 
     if args.model == "transformer":
-        model = TransformerSignModel(POSE_FEATURES, d_model=512, nhead=8,
-                                     num_layers=6, dim_feedforward=2048,
+        model = TransformerSignModel(POSE_FEATURES, d_model=256, nhead=4,
+                                     num_layers=4, dim_feedforward=1024,
                                      dropout=0.1, out_size=len(vocab)).to(device)
     else:
         model = SignModel(POSE_FEATURES, hidden=256, out_size=len(vocab)).to(device)
@@ -228,10 +230,15 @@ def main():
 
     lr        = args.lr if args.lr is not None else (1e-4 if args.model == "transformer" else LR)
     print(f"Learning rate: {lr:.2e}")
-    opt       = torch.optim.Adam(model.parameters(), lr=lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        opt, patience=10, factor=0.5, mode='min'
-    )
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    if args.scheduler == "cosine":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            opt, T_max=args.epochs, eta_min=1e-6
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            opt, patience=10, factor=0.5, mode='min'
+        )
     ctc_loss_fn = torch.nn.CTCLoss(blank=0, zero_infinity=True)
 
     start_epoch = 0
@@ -333,10 +340,14 @@ def main():
         skip_str = f"  skipped: {skipped}/{len(train_dl)}" if skipped else ""
         print(f"Epoch {epoch:3d}  Loss: {avg:.4f}  LR: {opt.param_groups[0]['lr']:.2e}{skip_str}", end="")
 
+        if args.scheduler == "cosine":
+            scheduler.step()
+
         if (epoch + 1) % args.eval_every == 0 or epoch == args.epochs - 1:
             val_cer, val_wer, val_attn_cer = evaluate(model, val_dl, vocab, device)
             best_eval_cer = min(val_cer, val_attn_cer) if val_attn_cer is not None else val_cer
-            scheduler.step(best_eval_cer)
+            if args.scheduler == "plateau":
+                scheduler.step(best_eval_cer)
             attn_str = f"  ATT-CER: {val_attn_cer:.4f}" if val_attn_cer is not None else ""
             print(f"  CTC-CER: {val_cer:.4f}  WER: {val_wer:.4f}{attn_str}", end="")
 
