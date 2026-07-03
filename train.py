@@ -22,8 +22,8 @@ def parse_args():
     p.add_argument("--batch",       type=int,   default=BATCH_SIZE)
     p.add_argument("--lr",          type=float, default=None,
                    help="Learning rate (default: 1e-4 for transformer, 1e-3 for bilstm)")
-    p.add_argument("--attn_weight", type=float, default=0.7,
-                   help="Fraction of loss from attention decoder (default: 0.7)")
+    p.add_argument("--attn_weight", type=float, default=0.3,
+                   help="Fraction of loss from attention decoder (default: 0.3)")
     p.add_argument("--checkpoint",  default="model.pth")
     p.add_argument("--resume",      default=None)
     p.add_argument("--val_split",   type=float, default=0.1)
@@ -304,6 +304,7 @@ def main():
                     attn_logits.reshape(-1, len(vocab)),
                     tgt_out.reshape(-1),
                     ignore_index=-100,
+                    label_smoothing=0.1,
                 )
                 # Normalise CTC by avg target length so both losses are on same scale
                 ctc_norm = ctc_loss_val / target_lengths.float().mean().clamp(min=1)
