@@ -33,6 +33,10 @@ def parse_args():
                    help="LR scheduler: cosine (CosineAnnealingLR) or plateau (ReduceLROnPlateau)")
     p.add_argument("--beam_width",  type=int,   default=1,
                    help="CTC beam width for evaluation (1=greedy, 10=beam search)")
+    p.add_argument("--weight_decay", type=float, default=1e-2,
+                   help="AdamW weight decay (default: 1e-2)")
+    p.add_argument("--feat_noise",  type=float, default=0.01,
+                   help="Std of Gaussian noise added to features during training (0=off)")
     return p.parse_args()
 
 
@@ -274,8 +278,9 @@ def main():
               f"CTC weight: {1-args.attn_weight}")
 
     lr        = args.lr if args.lr is not None else (1e-4 if args.model == "transformer" else LR)
-    print(f"Learning rate: {lr:.2e}")
-    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    wd        = args.weight_decay
+    print(f"Learning rate: {lr:.2e}  weight_decay: {wd}")
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
     if args.scheduler == "cosine":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             opt, T_max=args.epochs, eta_min=1e-6
@@ -319,6 +324,10 @@ def main():
             if not torch.isfinite(padded).all():
                 skipped += 1
                 continue
+
+            # Feature noise augmentation — helps prevent overfitting on exact keypoint values
+            if args.feat_noise > 0:
+                padded = padded + torch.randn_like(padded) * args.feat_noise
 
             # Compute encoder output lengths and padding mask
             if hasattr(model, 'subsampled_lengths'):
