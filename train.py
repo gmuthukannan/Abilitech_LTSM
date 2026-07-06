@@ -37,6 +37,10 @@ def parse_args():
                    help="AdamW weight decay (default: 1e-2)")
     p.add_argument("--feat_noise",  type=float, default=0.01,
                    help="Std of Gaussian noise added to features during training (0=off)")
+    p.add_argument("--time_mask_n", type=int,   default=2,
+                   help="Number of temporal mask segments per clip (SpecAugment-style, 0=off)")
+    p.add_argument("--time_mask_t", type=int,   default=20,
+                   help="Max width (frames) of each temporal mask segment")
     return p.parse_args()
 
 
@@ -325,9 +329,21 @@ def main():
                 skipped += 1
                 continue
 
-            # Feature noise augmentation — helps prevent overfitting on exact keypoint values
+            # Feature noise augmentation
             if args.feat_noise > 0:
                 padded = padded + torch.randn_like(padded) * args.feat_noise
+
+            # Temporal masking (SpecAugment-style): zero out random frame spans
+            if args.time_mask_n > 0:
+                B, T_pad, _ = padded.shape
+                for _ in range(args.time_mask_n):
+                    widths = torch.randint(1, args.time_mask_t + 1, (B,))
+                    starts = torch.stack([
+                        torch.randint(0, max(1, int(input_lengths[b].item()) - widths[b].item()), (1,)).squeeze()
+                        for b in range(B)
+                    ])
+                    for b in range(B):
+                        padded[b, starts[b]:starts[b] + widths[b]] = 0.0
 
             # Compute encoder output lengths and padding mask
             if hasattr(model, 'subsampled_lengths'):
