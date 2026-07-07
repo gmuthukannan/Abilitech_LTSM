@@ -24,6 +24,11 @@ tqdm
 matplotlib
 seaborn
 
+# Phase 3 — T5 correction model
+transformers>=4.40.0
+sentencepiece
+accelerate
+
 # Jupyter
 jupyter
 ipywidgets
