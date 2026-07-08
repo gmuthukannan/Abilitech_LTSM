@@ -18,7 +18,7 @@ from transformers import get_cosine_schedule_with_warmup
 
 
 PREFIX = "fix asl: "   # task prefix that tells T5 what to do
-MODEL_NAME = "google/flan-t5-small"   # 80M params; swap to flan-t5-base for more capacity
+MODEL_NAME = "google/flan-t5-base"    # 250M params — more capacity for 0.75 CER reconstruction
 
 
 def parse_args():
