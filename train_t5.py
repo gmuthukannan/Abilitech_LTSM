@@ -163,6 +163,7 @@ def main():
 
         if val_cer < best_cer:
             best_cer = val_cer
+            model.tie_weights()   # re-sync lm_head → shared.weight before saving
             model.save_pretrained(args.out)
             tokenizer.save_pretrained(args.out)
             print(f"  ✓ Saved to {args.out}  (best CER: {best_cer:.4f})")

@@ -111,6 +111,9 @@ def ctc_beam_search(log_probs, vocab, beam_width=10):
     NEG_INF = float('-inf')
     blank   = 0
     skip    = {vocab.sos_id, vocab.eos_id}
+    # Hard cap: no English sentence exceeds this many characters.
+    # Without this, beam search over-generates when blank probability is low.
+    max_out_len = max(log_probs.shape[0] // 4, 50)
 
     def log_add(a, b):
         if a == NEG_INF: return b
@@ -130,13 +133,14 @@ def ctc_beam_search(log_probs, vocab, beam_width=10):
             e = new_beam.setdefault(prefix, [NEG_INF, NEG_INF])
             e[0] = log_add(e[0], p_total + lp[blank])
 
-            # non-blank → extend prefix
-            for c in chars:
-                np_ = prefix + (c,)
-                # repeated last char must go through blank to avoid collapsing
-                add = pb + lp[c] if (prefix and prefix[-1] == c) else p_total + lp[c]
-                e = new_beam.setdefault(np_, [NEG_INF, NEG_INF])
-                e[1] = log_add(e[1], add)
+            # non-blank → extend prefix (skip if already at length cap)
+            if len(prefix) < max_out_len:
+                for c in chars:
+                    np_ = prefix + (c,)
+                    # repeated last char must go through blank to avoid collapsing
+                    add = pb + lp[c] if (prefix and prefix[-1] == c) else p_total + lp[c]
+                    e = new_beam.setdefault(np_, [NEG_INF, NEG_INF])
+                    e[1] = log_add(e[1], add)
 
         beam = dict(sorted(new_beam.items(),
                            key=lambda x: log_add(x[1][0], x[1][1]),
