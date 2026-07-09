@@ -10,8 +10,8 @@ Transcribes American Sign Language (ASL) video clips into natural English using 
 Video Input
     └─► MediaPipe Keypoints (225-dim per frame)
             └─► Transformer Encoder + CTC Loss
-                    └─► Gloss Sequence
-                            └─► T5 Gloss-to-English Model
+                    └─► Beam Search Decode
+                            └─► [Optional] T5 Correction
                                     └─► Natural English Output
                                             └─► [Optional] Claude API Refinement
 ```
@@ -20,49 +20,72 @@ Video Input
 
 ## Roadmap
 
-### Phase 1 — LSTM Baseline (Nearly Complete)
+### Phase 1 — LSTM Baseline ✅ Done
 
 - [x] BiLSTM model with CTC loss (`model.py`, `train.py`)
 - [x] How2Sign OpenPose JSON dataset loader (`How2SignDataset`)
 - [x] Checkpoint save/resume
 - [x] Switched from word-level (~26.9k tokens) to character-level vocabulary for stable CTC training
 - [x] Verified inference pipeline and greedy CTC decode
-- [ ] Benchmark CER/WER on validation split
 
-**Current model:** 2-layer bidirectional LSTM, hidden=256, 201-dim OpenPose input, character-level CTC
+### Phase 2 — Transformer Encoder ✅ Done — Best CER: 0.7497
 
-### Phase 2 — Transformer Encoder
+- [x] Replaced BiLSTM with Transformer encoder + hybrid CTC/Attention loss
+- [x] Stride-1 Conv1D subsampler (tripled usable training data: 8.8k → 30k clips)
+- [x] CTC as primary loss (attn_weight=0.3) — biggest single improvement (0.85 → 0.75 CER)
+- [x] CosineAnnealingLR, AdamW, label smoothing, temporal masking augmentation
+- [x] CTC beam search decoder (`ctc_beam_search` in `train.py`)
+- [x] Standalone evaluation script (`eval.py`) with `--beam_width` and `--t5` flags
 
-Replace BiLSTM with a Transformer encoder while keeping CTC loss and the same 201-dim input features.
+**Best checkpoint:** `model_ctc_primary.pth` — CER 0.7497 (greedy), ~0.749 (beam=10)
 
-Key decisions to make:
-- Positional encoding strategy (learned vs. sinusoidal)
-- Number of encoder layers and attention heads
-- Whether to keep character-level CTC or move to subword (BPE) tokens
+**Key finding:** CTC as primary signal (70% CTC + 30% Attention) was the critical unlock.
+Training with 70% attention loss but evaluating on CTC caused the ~0.85 plateau.
 
-### Phase 3 — T5 Gloss-to-English Translation
+### Phase 3 — T5 Correction ✅ Done (T5 not yet beating CTC)
 
-Add a T5 sequence-to-sequence stage after CTC decoding to refine raw gloss output into fluent English.
+- [x] `generate_t5_data.py` — generates (noisy_input, clean_target) pairs
+  - Default mode: runs CTC inference on training clips
+  - `--synthetic` mode: corrupts clean sentences at ~0.75 CER to fix train/val mismatch
+- [x] `train_t5.py` — fine-tunes flan-t5-base on correction pairs
+- [x] End-to-end eval in `eval.py` with `--t5 <dir>` flag
 
-- Input: CTC-decoded gloss string
-- Output: Natural English sentence
-- Fine-tune on How2Sign gloss↔English pairs
+**Results:**
 
-### Phase 4 — Claude API Refinement (Optional)
+| Model | CER |
+|-------|-----|
+| CTC greedy | 0.7497 |
+| CTC beam=10 | ~0.749 |
+| T5-small (real CTC data) | 0.8282 — worse |
+| T5-small (synthetic noise) | 0.7760 — worse |
+| T5-base (synthetic noise) | **0.7597** — still slightly worse |
 
-Post-process T5 output with a Claude API call for contextual correction and fluency improvement. Evaluate whether it provides measurable WER/BLEU gain over T5 alone.
+**Finding:** T5 doesn't improve CER at 0.75 noise level — 75% of characters wrong is too
+noisy for reconstruction. T5 becomes useful when CTC CER drops below ~0.50.
+Current production pipeline: CTC + beam search only (no T5).
 
-### Phase 5 — Live Camera Inference
+**Best T5 checkpoint:** `gs://abilitechhow2sign/checkpoints/t5_corrector_v4/`
 
-Real-time webcam inference using MediaPipe Holistic for keypoint extraction, feeding directly into the trained model with no video file I/O.
+### Phase 4 — Claude API Refinement ⏳ Deferred
+
+Post-process output with Claude API. Deferred until CTC CER improves further.
+
+### Phase 5 — Live Camera Inference 🔄 Next
+
+Real-time webcam inference using MediaPipe Holistic for keypoint extraction,
+feeding directly into the trained model with no video file I/O.
 
 ---
 
-## Current Architecture (Phase 1)
+## Current Architecture (Phase 2)
 
 ```
-How2Sign OpenPose JSON → 201-dim features → BiLSTM (2-layer, hidden=256, bidirectional)
-    → Linear(512 → vocab_size) → CTC Decode → Text
+How2Sign OpenPose JSON → 201-dim features
+    → Conv1DSubsampler (stride=1, kernel=3)
+    → PositionalEncoding
+    → TransformerEncoder (4 layers, d=256, nhead=4, ff=1024)
+    → CTC head → Beam Search → Text
+    → [+ Attention Decoder for training regularisation]
 ```
 
 ### Model (`model.py`)
@@ -70,9 +93,11 @@ How2Sign OpenPose JSON → 201-dim features → BiLSTM (2-layer, hidden=256, bid
 | Component | Detail |
 |-----------|--------|
 | Input | 201-dim OpenPose feature vector per frame |
-| LSTM | 2-layer bidirectional, hidden=256, dropout=0.3 |
-| Output | Linear(512 → vocab_size) — per-frame logits |
-| Loss | CTC (blank token = index 0) |
+| Subsampler | Conv1D stride=1 (no temporal reduction) |
+| Encoder | 4-layer Transformer, d_model=256, nhead=4, ff=1024 |
+| CTC head | Linear(256 → vocab_size) |
+| Attn decoder | 2-layer Transformer decoder (training only) |
+| Parameters | ~5.5M |
 
 **Feature breakdown (201 dims):**
 - 25 body keypoints × 3 (x, y, confidence) = 75
@@ -81,9 +106,24 @@ How2Sign OpenPose JSON → 201-dim features → BiLSTM (2-layer, hidden=256, bid
 
 ### Vocabulary (`vocab.py`)
 
-Character-level tokenization. Index 0 is the CTC blank token. All text is uppercased.
+Character-level tokenization. Index 0 = CTC blank, 1 = SOS, 2 = EOS, 3+ = characters.
+All text uppercased. Vocab size ~70 tokens.
 
-> **Why character-level?** The previous word-level vocabulary had ~26,940 tokens which caused unstable CTC gradients and sparse updates. Character-level (~30 tokens) trains much more reliably.
+---
+
+## GCS Checkpoints
+
+```
+gs://abilitechhow2sign/checkpoints/
+  model_ctc_primary.pth    ← BEST — CER 0.7497, use this for inference
+  model_stride1.pth        ← CER 0.8519 (older baseline)
+  model_hybrid.pth         ← earlier baseline
+  t5_corrector_v4/         ← flan-t5-base, val CER 0.7597
+
+gs://abilitechhow2sign/t5_data/
+  t5_train.tsv             ← ~90k synthetic noise training pairs
+  t5_val.tsv               ← real CTC val predictions
+```
 
 ---
 
@@ -95,7 +135,7 @@ Character-level tokenization. Index 0 is the CTC blank token. All text is upperc
 gs://abilitechhow2sign/
 ```
 
-How2Sign dataset stored in Google Cloud Storage. Pull with `gsutil` before training on a cloud GPU instance.
+How2Sign dataset stored in Google Cloud Storage. Pull with `gsutil` before training.
 
 ### How2Sign OpenPose Keypoints (`How2SignDataset`)
 
@@ -109,76 +149,105 @@ Expected layout after extracting `train_2D_keypoints.tar.gz`:
 ```
 
 CSV format: tab-separated, requires `SENTENCE_NAME` and `SENTENCE` columns.
+The keypoints extract directly into `/data/how2sign/` (not a subdirectory).
+Use `--keypoints /data/how2sign/` — `How2SignDataset` appends `openpose_output/json/` internally.
 
 ### Fake / Local Dataset (`dataset/`)
 
-8 synthetic samples for local CPU testing, generated by `make_data.py`. Each sample folder:
-- `pose.npy` — random float32 `(T, 201)`, T ∈ [40, 80]
-- `text.txt` — uppercase English phrase
-
-### MediaPipe Extraction (`extract_keypoints.py`)
-
-Extracts keypoints directly from raw `.mp4` videos using MediaPipe Holistic.
-
-> **Dimension mismatch warning:** MediaPipe produces 225-dim features (33 pose + 21+21 hands, each ×3). The current model and `How2SignDataset` use 201-dim OpenPose features. Do not mix without aligning to a single feature extractor.
+8 synthetic samples for local CPU testing, generated by `make_data.py`.
 
 ---
 
 ## Training (`train.py`)
 
-### Hyperparameters
+### Hyperparameters (Transformer, current best)
 
-| Parameter | Default |
-|-----------|---------|
-| Batch size | 16 |
-| Epochs | 50 |
-| Learning rate | 1e-3 (Adam) |
-| LR scheduler | ReduceLROnPlateau (patience=5, factor=0.5) |
-| Gradient clipping | max norm 5.0 |
-
-### Usage
-
-```bash
-# Local fake data
-python train.py
-
-# How2Sign real data
-python train.py \
-  --keypoints /data/how2sign/train_2D_keypoints/ \
-  --csv /data/how2sign/train_labels_v1.csv
-
-# Resume checkpoint
-python train.py --resume model.pth --epochs 100
-```
+| Parameter | Value |
+|-----------|-------|
+| Model | Transformer encoder |
+| d_model | 256 |
+| Layers | 4 |
+| Heads | 4 |
+| Batch size | 64 (H100) |
+| Epochs | 500 |
+| Learning rate | 1e-4 |
+| LR scheduler | CosineAnnealingLR |
+| Optimizer | AdamW, weight_decay=0.01 |
+| attn_weight | 0.3 (CTC gets 70% of gradient) |
+| Label smoothing | 0.1 |
+| Temporal masking | 2 segments, max 20 frames |
+| Feature noise | std=0.01 |
+| Gradient clipping | 1.0 |
 
 ### CLI Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--keypoints` | None | Path to extracted How2Sign keypoints dir |
+| `--keypoints` | None | Path to How2Sign keypoints dir |
 | `--csv` | None | How2Sign annotation CSV |
-| `--fake` | `dataset` | Fake local dataset dir |
+| `--model` | `transformer` | `transformer` or `bilstm` |
 | `--epochs` | 50 | Training epochs |
 | `--batch` | 16 | Batch size |
-| `--checkpoint` | `model.pth` | Checkpoint output path |
-| `--resume` | None | Resume from this checkpoint |
-| `--val_split` | 0.1 | Fraction of data held out for validation |
-| `--eval_every` | 5 | Run CER/WER eval every N epochs |
+| `--checkpoint` | `model.pth` | Output path |
+| `--resume` | None | Resume from checkpoint |
+| `--val_split` | 0.1 | Validation fraction |
+| `--eval_every` | 5 | Eval interval (epochs) |
+| `--attn_weight` | 0.3 | Attention decoder loss weight |
+| `--scheduler` | `cosine` | `cosine` or `plateau` |
+| `--beam_width` | 1 | CTC beam width for eval (1=greedy) |
+| `--weight_decay` | 0.01 | AdamW weight decay |
+| `--feat_noise` | 0.01 | Gaussian noise std on features |
+| `--time_mask_n` | 2 | Number of temporal mask segments |
+| `--time_mask_t` | 20 | Max frames per mask segment |
 
 ### Metrics
 
-- **CER** (Character Error Rate) — Levenshtein distance at character level, normalised by target length. Primary metric; best checkpoint is saved on lowest val CER.
-- **WER** (Word Error Rate) — Levenshtein distance at word level, normalised by target word count.
+- **CER** — Character Error Rate (primary). Best checkpoint saved on lowest val CER.
+- **WER** — Word Error Rate.
 
-Both are computed on the held-out validation split every `--eval_every` epochs and at the final epoch.
+---
 
-### Checkpoint Format
+## Evaluation (`eval.py`)
 
-```python
-{"epoch": int, "model": state_dict, "vocab": w2i_dict, "loss": float, "cer": float, "wer": float}
+```bash
+# CTC only (beam search)
+python eval.py \
+  --checkpoint checkpoints/model_ctc_primary.pth \
+  --keypoints  /data/how2sign/ \
+  --csv        /data/how2sign/train_labels.csv \
+  --beam_width 10
+
+# Full pipeline (CTC + T5)
+python eval.py \
+  --checkpoint checkpoints/model_ctc_primary.pth \
+  --t5         checkpoints/t5_corrector_v4/ \
+  --keypoints  /data/how2sign/ \
+  --csv        /data/how2sign/train_labels.csv \
+  --beam_width 1
 ```
 
-Best model is saved when `val_cer` improves (previously: train loss).
+---
+
+## T5 Correction (`train_t5.py`, `generate_t5_data.py`)
+
+```bash
+# Generate training data (synthetic noise mode — recommended)
+python generate_t5_data.py \
+  --checkpoint checkpoints/model_ctc_primary.pth \
+  --keypoints  /data/how2sign/ \
+  --csv        /data/how2sign/train_labels.csv \
+  --synthetic
+
+# Train T5
+python train_t5.py \
+  --train t5_train.tsv \
+  --val   t5_val.tsv \
+  --epochs 20 \
+  --out   checkpoints/t5_corrector/
+
+# Back up T5 model
+gsutil cp -r checkpoints/t5_corrector/ gs://abilitechhow2sign/checkpoints/t5_corrector/
+```
 
 ---
 
@@ -207,12 +276,10 @@ brev create asl-train --instance-type g6e.12xlarge
 brev ls   # wait until status = running
 ```
 
-> You can also spin up from the Brev console at [console.brev.dev](https://console.brev.dev) and SSH in with the steps below.
-
 ### 2. Open a shell (local machine)
 
 ```bash
-brev shell asl-train
+brev shell abilitech-test-007
 # or
 brev open asl-train   # opens VS Code remote
 ```
@@ -234,70 +301,65 @@ gcloud init
 ### 4. Pull training data from GCloud
 
 ```bash
-# Create the data directory first
 sudo mkdir -p /data/how2sign
 sudo chmod 777 /data/how2sign
 
-# Download keypoints archive (~several GB)
 gsutil cp gs://abilitechhow2sign/train_2D_keypoints.tar.gz /data/how2sign/train_2D_keypoints.tar.gz
-
-# Extract
 tar -xzf /data/how2sign/train_2D_keypoints.tar.gz -C /data/how2sign/
-
-# Download annotation CSV
 gsutil cp gs://abilitechhow2sign/train_labels.csv /data/how2sign/
 ```
 
-### 5. Pull the latest checkpoint from GCloud
+### 5. Set up repo and Python environment
 
-```bash
-mkdir -p ~/Abilitech_LTSM/checkpoints
-gsutil cp gs://abilitechhow2sign/checkpoints/model_hybrid.pth ~/Abilitech_LTSM/checkpoints/model_hybrid.pth
-```
-
-### 6. Set up repo and Python environment
-
-If the repo is already cloned, just pull latest changes:
-```bash
-cd ~/Abilitech_LTSM && git pull
-```
-
-Otherwise clone fresh:
 ```bash
 git clone https://github.com/gmuthukannan/Abilitech_LTSM ~/Abilitech_LTSM
 cd ~/Abilitech_LTSM
+# or if already cloned:
+cd ~/Abilitech_LTSM && git pull
 ```
 
-Create a virtualenv (required — the system Python is externally managed):
 ```bash
 sudo apt install python3.12-venv -y
 python3 -m venv ~/asl/venv
 source ~/asl/venv/bin/activate
-echo "source ~/asl/venv/bin/activate" >> ~/.bashrc   # auto-activate on reconnect
+echo "source ~/asl/venv/bin/activate" >> ~/.bashrc
 
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 ```
 
-### 7. Resume training
+### 6. Pull checkpoints from GCloud
 
 ```bash
-cd ~/Abilitech_LTSM
-python train.py \
-  --keypoints /data/how2sign/ \
-  --csv       /data/how2sign/train_labels.csv \
-  --model     transformer \
-  --batch     64 \
-  --checkpoint checkpoints/model_hybrid.pth \
-  --resume    checkpoints/model_hybrid.pth
+mkdir -p ~/Abilitech_LTSM/checkpoints
+gsutil cp gs://abilitechhow2sign/checkpoints/model_ctc_primary.pth ~/Abilitech_LTSM/checkpoints/model_ctc_primary.pth
+# Optional: T5 corrector
+gsutil cp -r gs://abilitechhow2sign/checkpoints/t5_corrector_v4/ ~/Abilitech_LTSM/checkpoints/t5_corrector_v4/
 ```
 
-> On H100, batch size 64–128 is safe. Both `--checkpoint` and `--resume` point to the same file so best checkpoints overwrite in-place. Use a different `--checkpoint` path (e.g. `model_hybrid_v2.pth`) to preserve the original.
-
-### 8. Push checkpoint back to GCloud
+### 7. Resume CTC training
 
 ```bash
-gsutil cp ~/asl/checkpoints/model_hybrid.pth gs://abilitechhow2sign/checkpoints/model_hybrid.pth
+tmux new -s train
+
+python train.py \
+  --keypoints  /data/how2sign/ \
+  --csv        /data/how2sign/train_labels.csv \
+  --model      transformer \
+  --batch      64 \
+  --epochs     500 \
+  --checkpoint checkpoints/model_ctc_primary_v2.pth \
+  --resume     checkpoints/model_ctc_primary.pth
+
+# Detach: Ctrl+B then D
+# Reattach: tmux attach -t train
+```
+
+### 8. Push checkpoints back to GCloud
+
+```bash
+gsutil cp ~/Abilitech_LTSM/checkpoints/model_ctc_primary.pth gs://abilitechhow2sign/checkpoints/model_ctc_primary.pth
+gsutil cp -r ~/Abilitech_LTSM/checkpoints/t5_corrector_v4/ gs://abilitechhow2sign/checkpoints/t5_corrector_v4/
 ```
 
 ### 9. Stop the instance when done (local machine)
@@ -313,11 +375,14 @@ brev delete asl-train   # only when fully done to avoid charges
 
 | File | Purpose |
 |------|---------|
-| `model.py` | BiLSTM model definition (Phase 1) |
+| `model.py` | BiLSTM (Phase 1) + TransformerSignModel (Phase 2) |
 | `dataset.py` | `SignDataset` (local) + `How2SignDataset` (OpenPose JSON) |
-| `vocab.py` | Character-level vocabulary with CTC blank |
-| `train.py` | Training loop, CTC loss, checkpoint, greedy decode |
-| `extract_keypoints.py` | MediaPipe Holistic extraction from raw video |
+| `vocab.py` | Character-level vocabulary with CTC blank/SOS/EOS |
+| `train.py` | Training loop, CTC+Attention loss, beam search, checkpointing |
+| `eval.py` | Standalone evaluation: CTC beam search + optional T5 pipeline |
+| `generate_t5_data.py` | Generate (noisy CTC, clean target) pairs for T5 fine-tuning |
+| `train_t5.py` | Fine-tune flan-t5-base on correction pairs |
+| `extract_keypoints.py` | MediaPipe Holistic extraction from raw `.mp4` video |
 | `make_data.py` | Generate synthetic local dataset for testing |
 | `requirements.txt` | Python dependencies |
 | `dataset/` | 8 fake samples (pose.npy + text.txt each) |
