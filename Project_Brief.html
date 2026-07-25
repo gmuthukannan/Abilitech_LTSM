@@ -1,0 +1,554 @@
+<title>ASL Sign-to-Text — Project Brief · Abilitech</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg:          #F5F6FA;
+    --surface:     #FFFFFF;
+    --border:      #DDE1EC;
+    --border-soft: #ECEEF5;
+    --text:        #171C2E;
+    --text-2:      #515A78;
+    --text-3:      #8B94AD;
+    --accent:      #2952E3;
+    --amber:       #D08A10;
+    --amber-bg:    #FEF6E7;
+    --good:        #1A7A52;
+    --good-bg:     #EDFAF4;
+    --rule:        #CBD0E0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:          #0D0F1C;
+      --surface:     #141828;
+      --border:      #222840;
+      --border-soft: #1C2035;
+      --text:        #E2E6F4;
+      --text-2:      #8890A8;
+      --text-3:      #555E78;
+      --accent:      #4D72F5;
+      --amber:       #F0A830;
+      --amber-bg:    #1F1A08;
+      --good:        #34C986;
+      --good-bg:     #071A11;
+      --rule:        #2A2F48;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:#F5F6FA;--surface:#FFFFFF;--border:#DDE1EC;--border-soft:#ECEEF5;
+    --text:#171C2E;--text-2:#515A78;--text-3:#8B94AD;--accent:#2952E3;
+    --amber:#D08A10;--amber-bg:#FEF6E7;--good:#1A7A52;--good-bg:#EDFAF4;--rule:#CBD0E0;
+  }
+  :root[data-theme="dark"] {
+    --bg:#0D0F1C;--surface:#141828;--border:#222840;--border-soft:#1C2035;
+    --text:#E2E6F4;--text-2:#8890A8;--text-3:#555E78;--accent:#4D72F5;
+    --amber:#F0A830;--amber-bg:#1F1A08;--good:#34C986;--good-bg:#071A11;--rule:#2A2F48;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    padding: 48px 24px 80px;
+  }
+
+  .page {
+    max-width: 780px;
+    margin: 0 auto;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding-bottom: 28px;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: 40px;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .brand {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .header-meta {
+    text-align: right;
+  }
+  .header-meta .doc-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  .header-meta .doc-date {
+    font-size: 12px;
+    color: var(--text-3);
+    margin-top: 2px;
+  }
+
+  /* ── Intro ── */
+  .intro {
+    margin-bottom: 48px;
+  }
+  .intro h1 {
+    font-size: clamp(24px, 4vw, 34px);
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    line-height: 1.2;
+    color: var(--text);
+    text-wrap: balance;
+    margin-bottom: 14px;
+  }
+  .intro p {
+    font-size: 16px;
+    color: var(--text-2);
+    max-width: 600px;
+    line-height: 1.65;
+  }
+
+  /* ── Section eyebrow ── */
+  .eyebrow {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    margin-bottom: 16px;
+  }
+
+  /* ── Key metrics row ── */
+  .metrics-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 52px;
+  }
+  .metric {
+    background: var(--surface);
+    padding: 22px 24px;
+  }
+  .metric-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    margin-bottom: 8px;
+  }
+  .metric-value {
+    font-size: 30px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    line-height: 1;
+  }
+  .metric-value.good { color: var(--good); }
+  .metric-sub {
+    font-size: 12px;
+    color: var(--text-3);
+    margin-top: 5px;
+  }
+
+  /* ── Progress section ── */
+  .section { margin-bottom: 52px; }
+
+  .progress-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 4px;
+  }
+  .progress-table tr {
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .progress-table tr:last-child { border-bottom: none; }
+  .progress-table td {
+    padding: 13px 0;
+    vertical-align: middle;
+  }
+  .progress-table td:first-child {
+    font-size: 13px;
+    color: var(--text-2);
+    width: 260px;
+    padding-right: 20px;
+  }
+  .progress-table td.cer-val {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+    width: 70px;
+  }
+  .bar-cell { width: 100%; }
+  .bar-wrap {
+    height: 6px;
+    background: var(--border-soft);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--rule);
+    transition: width 0.4s ease;
+  }
+  .bar-fill.best { background: var(--accent); }
+  .best-row td { color: var(--text) !important; }
+  .best-badge {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    background: var(--accent);
+    color: #fff;
+    padding: 2px 7px;
+    border-radius: 3px;
+    margin-left: 8px;
+    vertical-align: middle;
+  }
+
+  /* ── Phase timeline ── */
+  .phases {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+    gap: 12px;
+    margin-top: 4px;
+  }
+  .phase {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 16px 18px;
+  }
+  .phase.done {
+    border-left: 3px solid var(--good);
+  }
+  .phase.next {
+    border-left: 3px solid var(--accent);
+    background: var(--border-soft);
+  }
+  .phase.deferred {
+    border-left: 3px solid var(--border);
+    opacity: 0.65;
+  }
+  .phase-num {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    margin-bottom: 5px;
+  }
+  .phase-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+  .phase-status {
+    font-size: 11.5px;
+    color: var(--text-3);
+  }
+  .phase.done .phase-status { color: var(--good); }
+  .phase.next .phase-status { color: var(--accent); }
+
+  /* ── Architecture ── */
+  .arch-diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 24px 28px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12.5px;
+    color: var(--text-2);
+    line-height: 1.9;
+    overflow-x: auto;
+    margin-top: 4px;
+  }
+  .arch-diagram .hl { color: var(--accent); font-weight: 600; }
+  .arch-diagram .dim { color: var(--text-3); }
+
+  /* ── Model access ── */
+  .model-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 7px;
+    padding: 22px 24px;
+    margin-top: 4px;
+  }
+  .model-card h3 {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 14px;
+  }
+  .model-spec-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 14px 24px;
+    margin-bottom: 18px;
+  }
+  .spec-item .spec-label {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    margin-bottom: 3px;
+  }
+  .spec-item .spec-val {
+    font-size: 13px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--text);
+  }
+  .code-block {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 12px 16px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    color: var(--text-2);
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  .code-block .comment { color: var(--text-3); }
+
+  /* ── Next steps callout ── */
+  .next-callout {
+    background: var(--amber-bg);
+    border: 1px solid var(--amber);
+    border-radius: 7px;
+    padding: 20px 24px;
+    margin-top: 4px;
+  }
+  .next-callout h3 {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--amber);
+    margin-bottom: 12px;
+    letter-spacing: 0.02em;
+  }
+  .next-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+  .next-list li {
+    font-size: 13.5px;
+    color: var(--text-2);
+    padding-left: 18px;
+    position: relative;
+  }
+  .next-list li::before {
+    content: "→";
+    position: absolute;
+    left: 0;
+    color: var(--amber);
+    font-weight: 700;
+  }
+
+  hr.rule {
+    border: none;
+    border-top: 1px solid var(--rule);
+    margin: 48px 0;
+  }
+
+  @media (max-width: 540px) {
+    .progress-table td:first-child { width: auto; }
+    .progress-table .bar-cell { display: none; }
+  }
+</style>
+
+<div class="page">
+
+  <header class="header">
+    <div class="brand">Abilitech</div>
+    <div class="header-meta">
+      <div class="doc-title">ASL Sign-to-Text — Project Brief</div>
+      <div class="doc-date">July 2026</div>
+    </div>
+  </header>
+
+  <div class="intro">
+    <h1>Transcribing American Sign Language into English with Deep Learning</h1>
+    <p>
+      An end-to-end pipeline that converts ASL video clips into English text using
+      body keypoint extraction, a Transformer encoder, and CTC sequence decoding —
+      trained on 30,000 real signing clips from the How2Sign dataset.
+    </p>
+  </div>
+
+  <!-- Key metrics -->
+  <div class="eyebrow">Key Results</div>
+  <div class="metrics-row">
+    <div class="metric">
+      <div class="metric-label">Best CER</div>
+      <div class="metric-value good">0.7497</div>
+      <div class="metric-sub">Character Error Rate (lower is better)</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Training Clips</div>
+      <div class="metric-value">30k</div>
+      <div class="metric-sub">How2Sign OpenPose keypoints</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Model Size</div>
+      <div class="metric-value">5.5M</div>
+      <div class="metric-sub">Parameters, Transformer encoder</div>
+    </div>
+    <div class="metric">
+      <div class="metric-label">Training Time</div>
+      <div class="metric-value">~20h</div>
+      <div class="metric-sub">Per run on NVIDIA H100</div>
+    </div>
+  </div>
+
+  <!-- Accuracy progress -->
+  <div class="section">
+    <div class="eyebrow">Accuracy Progress</div>
+    <table class="progress-table">
+      <tbody>
+        <tr>
+          <td>BiLSTM baseline</td>
+          <td class="cer-val">~1.00</td>
+          <td class="bar-cell"><div class="bar-wrap"><div class="bar-fill" style="width:100%"></div></div></td>
+        </tr>
+        <tr>
+          <td>+ Transformer encoder</td>
+          <td class="cer-val">0.8519</td>
+          <td class="bar-cell"><div class="bar-wrap"><div class="bar-fill" style="width:85%"></div></div></td>
+        </tr>
+        <tr>
+          <td>+ Stride-1 conv (3× more data)</td>
+          <td class="cer-val">0.8519</td>
+          <td class="bar-cell"><div class="bar-wrap"><div class="bar-fill" style="width:85%"></div></div></td>
+        </tr>
+        <tr>
+          <td>+ CosineAnnealingLR</td>
+          <td class="cer-val">0.8600</td>
+          <td class="bar-cell"><div class="bar-wrap"><div class="bar-fill" style="width:86%"></div></div></td>
+        </tr>
+        <tr class="best-row">
+          <td><strong>+ CTC as primary loss (70/30)</strong> <span class="best-badge">Best</span></td>
+          <td class="cer-val"><strong>0.7497</strong></td>
+          <td class="bar-cell"><div class="bar-wrap"><div class="bar-fill best" style="width:75%"></div></div></td>
+        </tr>
+        <tr>
+          <td>+ T5-base correction (flan-t5-base)</td>
+          <td class="cer-val">0.7597</td>
+          <td class="bar-cell"><div class="bar-wrap"><div class="bar-fill" style="width:76%"></div></div></td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin-top:14px; font-size:12.5px; color:var(--text-3);">
+      The critical unlock was fixing a training/evaluation mismatch: the model was optimising
+      70% attention-decoder loss while being evaluated on CTC output. Flipping the ratio
+      (70% CTC, 30% attention) dropped CER from 0.85 → 0.75 in a single training run.
+    </p>
+  </div>
+
+  <!-- Phase status -->
+  <div class="section">
+    <div class="eyebrow">Phase Status</div>
+    <div class="phases">
+      <div class="phase done">
+        <div class="phase-num">Phase 1</div>
+        <div class="phase-name">LSTM Baseline</div>
+        <div class="phase-status">✓ Complete</div>
+      </div>
+      <div class="phase done">
+        <div class="phase-num">Phase 2</div>
+        <div class="phase-name">Transformer + CTC</div>
+        <div class="phase-status">✓ Complete — CER 0.7497</div>
+      </div>
+      <div class="phase done">
+        <div class="phase-num">Phase 3</div>
+        <div class="phase-name">T5 Correction</div>
+        <div class="phase-status">✓ Complete — T5 not yet beneficial at 0.75 CER</div>
+      </div>
+      <div class="phase next">
+        <div class="phase-num">Phase 5</div>
+        <div class="phase-name">Live Camera Demo</div>
+        <div class="phase-status">→ Next</div>
+      </div>
+      <div class="phase deferred">
+        <div class="phase-num">Phase 4</div>
+        <div class="phase-name">Claude API</div>
+        <div class="phase-status">Deferred — after CER &lt; 0.50</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Architecture -->
+  <div class="section">
+    <div class="eyebrow">How It Works</div>
+    <div class="arch-diagram">
+      <span class="dim">ASL video clip</span><br>
+      &nbsp;&nbsp;&nbsp;└─► <span class="hl">OpenPose / MediaPipe</span> &nbsp;<span class="dim">→ 201-dim keypoints per frame</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└─► <span class="hl">Conv1D subsampler</span> &nbsp;<span class="dim">→ local feature mixing</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└─► <span class="hl">Transformer encoder</span> &nbsp;<span class="dim">4 layers · d=256 · 5.5M params</span><br>
+      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└─► <span class="hl">CTC beam search</span> &nbsp;<span class="dim">→ English text output</span>
+    </div>
+  </div>
+
+  <hr class="rule">
+
+  <!-- Model access -->
+  <div class="section">
+    <div class="eyebrow">Best Model — Access &amp; Specs</div>
+    <div class="model-card">
+      <h3>model_ctc_primary.pth</h3>
+      <div class="model-spec-grid">
+        <div class="spec-item">
+          <div class="spec-label">CER</div>
+          <div class="spec-val">0.7497 (greedy)<br>~0.749 (beam=10)</div>
+        </div>
+        <div class="spec-item">
+          <div class="spec-label">Architecture</div>
+          <div class="spec-val">Transformer encoder<br>d=256, 4 layers, 4 heads</div>
+        </div>
+        <div class="spec-item">
+          <div class="spec-label">Input</div>
+          <div class="spec-val">201-dim OpenPose<br>keypoints per frame</div>
+        </div>
+        <div class="spec-item">
+          <div class="spec-label">Vocabulary</div>
+          <div class="spec-val">~70 tokens<br>character-level</div>
+        </div>
+      </div>
+      <div class="code-block">
+        <span class="comment"># Download from Google Cloud Storage</span><br>
+        gsutil cp gs://abilitechhow2sign/checkpoints/model_ctc_primary.pth ./
+      </div>
+    </div>
+  </div>
+
+  <!-- Next steps -->
+  <div class="section">
+    <div class="eyebrow">What's Next</div>
+    <div class="next-callout">
+      <h3>Immediate priorities</h3>
+      <ul class="next-list">
+        <li>Add How2Sign val + test splits to training data (~5k more clips) — expected to push CER below 0.70</li>
+        <li>Build live webcam demo (Phase 5): MediaPipe → model → real-time text on screen</li>
+        <li>T5 correction becomes valuable once CTC CER drops below ~0.50 — revisit after data expansion</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
